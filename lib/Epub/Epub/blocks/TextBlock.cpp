@@ -1,10 +1,14 @@
 #include "TextBlock.h"
 
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Serialization.h>
 #include <Utf8.h>
 #include <VerticalTextUtils.h>
+
+#include <algorithm>
+#include <cstdlib>
 
 #include "../InlineImage.h"
 #include "ImageBlock.h"
@@ -40,11 +44,75 @@ void TextBlock::collectCodepoints(std::vector<uint32_t>& out, size_t max) const 
   }
 }
 
-bool TextBlock::hasRuby() const {
-  for (const auto& rt : rubyTexts) {
-    if (!rt.empty()) return true;
+bool TextBlock::hasRuby() const { return !rubySpans.empty(); }
+
+int TextBlock::wordExtent(const GfxRenderer& renderer, const int fontId, const size_t index,
+                          const int columnWidth) const {
+  const auto style = wordStyles[index];
+  const int wordFontId = ((style & EpdFontFamily::SCRIPT_MASK) != 0 && smallFontId != 0) ? smallFontId : fontId;
+  if (isVertical) {
+    if (InlineImage::isInlineImage(words[index])) {
+      // Geometry needs only the height, not an allocated copy of the image path.
+      const size_t comma = words[index].find(',');
+      if (comma != std::string::npos) {
+        char* end = nullptr;
+        const long height = std::strtol(words[index].c_str() + comma + 1, &end, 10);
+        if (end && *end == ',' && height > 0 && height <= INT16_MAX) return static_cast<int>(height);
+      }
+    }
+    const auto& word = words[index];
+    if (word.size() <= 2 && !word.empty() && word.find_first_not_of("0123456789") == std::string::npos) {
+      return columnWidth;  // tate-chu-yoko is one full-height cell
+    }
   }
-  return false;
+  return renderer.getTextAdvanceX(wordFontId, words[index].c_str(), style);
+}
+
+void TextBlock::renderRuby(GfxRenderer& renderer, const int fontId, const int x, const int y, const int columnWidth,
+                           const int viewportWidth, const int viewportX) const {
+  if (rubyFontId == 0 || rubySpans.empty() || words.empty()) return;
+  if (renderer.getFontCacheManager() && renderer.getFontCacheManager()->isScanning()) {
+    for (const auto& span : rubySpans) {
+      renderer.drawRubyText(rubyFontId, 0, 0, span.text.c_str(), isVertical, 0, 0, 0, 0);
+    }
+    return;
+  }
+  const auto& positions = isVertical ? wordYpos : wordXpos;
+  if (positions.size() != words.size()) return;
+  const int origin = isVertical ? y : x;
+  // Use the actual text extent, NOT the viewport, and exclude trailing vertical
+  // character spacing. Indents and short final lines retain their own bounds.
+  int lineStart = origin + positions.front();
+  int lineEnd = origin + positions.back() + wordExtent(renderer, fontId, words.size() - 1, columnWidth);
+  if (isVertical) {
+    lineStart = std::max(lineStart, 0);
+    lineEnd = std::min(lineEnd, renderer.getScreenHeight());
+  } else if (viewportWidth > 0) {
+    lineStart = std::max(lineStart, viewportX);
+    lineEnd = std::min(lineEnd, viewportX + viewportWidth);
+  }
+  for (size_t i = 0; i < rubySpans.size(); ++i) {
+    const auto& span = rubySpans[i];
+    if (span.count == 0 || span.end() > words.size() || span.text.empty()) continue;
+    const size_t last = span.end() - 1;
+    const int baseStart = origin + positions[span.start];
+    const int baseEnd = origin + positions[last] + wordExtent(renderer, fontId, last, columnWidth);
+    int limitStart = lineStart;
+    int limitEnd = lineEnd;
+    if (i > 0) {
+      const size_t prevLast = rubySpans[i - 1].end() - 1;
+      const int prevEnd = origin + positions[prevLast] + wordExtent(renderer, fontId, prevLast, columnWidth);
+      limitStart = std::max(limitStart, prevEnd + (baseStart - prevEnd) / 2);
+    }
+    if (i + 1 < rubySpans.size()) {
+      const int nextStart = origin + positions[rubySpans[i + 1].start];
+      limitEnd = std::min(limitEnd, baseEnd + (nextStart - baseEnd) / 2);
+    }
+    const int rubyX = isVertical ? x + wordXpos[span.start] + columnWidth + 2 : 0;
+    const int rubyY = isVertical ? 0 : y - renderer.getLineHeight(rubyFontId) - 1;
+    renderer.drawRubyText(rubyFontId, rubyX, rubyY, span.text.c_str(), isVertical, baseStart, baseEnd, limitStart,
+                          limitEnd);
+  }
 }
 
 void TextBlock::render(GfxRenderer& renderer, const int fontId, const int x, const int y, const int viewportWidth,
@@ -58,18 +126,8 @@ void TextBlock::render(GfxRenderer& renderer, const int fontId, const int x, con
 
   const int effectiveFontId = (blockStyle.fontId != 0) ? blockStyle.fontId : fontId;
 
-  // ルビフォントのグリフをプリロード（SDカードフォントの場合）
-  if (rubyFontId != 0 && hasRuby() && renderer.isSdCardFont(rubyFontId)) {
-    std::string allRuby;
-    for (const auto& rt : rubyTexts) {
-      if (!rt.empty()) allRuby += rt;
-    }
-    if (!allRuby.empty()) {
-      // ルビは常に REGULAR で描画する（下の drawText/drawTextVertical 参照）。
-      // 全スタイルを要求すると、使わない Bold のぶんまで .cpfont を読むことになる。
-      renderer.ensureSdCardFontReady(rubyFontId, allRuby.c_str(), 1u << EpdFontFamily::REGULAR);
-    }
-  }
+  // Ruby is recorded directly by drawRubyText during the normal prewarm scan.
+  // No concatenated temporary string or per-render advance table is needed.
 
   // <sup> / <sub> 用の小さいフォントのグリフをプリロード（SDカードフォントの場合）。
   // 本文フォントとは別のフォントIDなので、本文ぶんのプリロードでは用意されない。
@@ -123,11 +181,6 @@ void TextBlock::render(GfxRenderer& renderer, const int fontId, const int x, con
         if (imageX < 0) imageX = 0;
         ImageBlock(imagePath, static_cast<int16_t>(imageWidth), static_cast<int16_t>(imageHeight))
             .render(renderer, imageX, wy);
-        // 画像語に付いたルビ（<ruby><img/><rt>…</rt></ruby>）は通常の縦書きルビと同じ位置に描く
-        if (rubyFontId != 0 && i < rubyTexts.size() && !rubyTexts[i].empty()) {
-          renderer.drawTextVertical(rubyFontId, wx + columnWidth + 2, wy, rubyTexts[i].c_str(), true,
-                                    EpdFontFamily::REGULAR);
-        }
       }
       continue;
     }
@@ -145,11 +198,6 @@ void TextBlock::render(GfxRenderer& renderer, const int fontId, const int x, con
 
       if (isSingleCjk) {
         renderer.drawTextVertical(wordFontId, wx, wy, w, true, currentStyle);
-        // 縦書きルビ描画（親文字の右側）
-        if (rubyFontId != 0 && i < rubyTexts.size() && !rubyTexts[i].empty()) {
-          const int rubyX = wx + columnWidth + 2;
-          renderer.drawTextVertical(rubyFontId, rubyX, wy, rubyTexts[i].c_str(), true, EpdFontFamily::REGULAR);
-        }
       } else {
         bool allDigits = true;
         int asciiCount = 0;
@@ -175,22 +223,6 @@ void TextBlock::render(GfxRenderer& renderer, const int fontId, const int x, con
     } else {
       const int wordX = wordXpos[i] + x;
       renderer.drawText(wordFontId, wordX, y + scriptYOffset, words[i].c_str(), true, currentStyle);
-      // 横書きルビ描画
-      if (rubyFontId != 0 && i < rubyTexts.size() && !rubyTexts[i].empty()) {
-        const int baseWidth = renderer.getTextAdvanceX(wordFontId, words[i].c_str(), currentStyle);
-        const int rubyWidth = renderer.getTextWidth(rubyFontId, rubyTexts[i].c_str(), EpdFontFamily::REGULAR);
-        // 親文字の中央に置く（中付き）。ルビが親文字より長いときは前後の文字にかぶせる
-        // （JLREQ の「ルビの突出」）が、行頭・行末ではビューポートの外に出て欠けるので、
-        // 行の範囲内に収まるように寄せる。
-        int rubyX = wordXpos[i] + x + (baseWidth - rubyWidth) / 2;
-        if (viewportWidth > 0) {
-          const int maxX = viewportX + viewportWidth - rubyWidth;
-          if (rubyX > maxX) rubyX = maxX;
-          if (rubyX < viewportX) rubyX = viewportX;
-        }
-        const int rubyY = y - renderer.getLineHeight(rubyFontId) - 1;
-        renderer.drawText(rubyFontId, rubyX, rubyY, rubyTexts[i].c_str(), true, EpdFontFamily::REGULAR);
-      }
 
       if ((currentStyle & EpdFontFamily::UNDERLINE) != 0) {
         const std::string& w = words[i];
@@ -215,6 +247,8 @@ void TextBlock::render(GfxRenderer& renderer, const int fontId, const int x, con
       }
     }
   }
+
+  renderRuby(renderer, effectiveFontId, x, y, columnWidth, viewportWidth, viewportX);
 
   // Draw full-width separator line below the block (used for h1/h2 headings).
   // Suppressed in vertical mode: horizontal lines are inappropriate for tategaki.
@@ -286,9 +320,13 @@ bool TextBlock::serialize(FsFile& file) const {
     for (auto y : wordYpos) serialization::writePod(file, y);
   }
 
-  // Ruby text data
-  for (size_t i = 0; i < words.size(); i++) {
-    serialization::writeString(file, (i < rubyTexts.size()) ? rubyTexts[i] : std::string());
+  // Sparse ruby associations. Write the owned string by reference (a ternary
+  // with std::string() would copy the non-empty branch into a temporary).
+  serialization::writePod(file, static_cast<uint16_t>(rubySpans.size()));
+  for (const auto& span : rubySpans) {
+    serialization::writePod(file, span.start);
+    serialization::writePod(file, span.count);
+    serialization::writeString(file, span.text);
   }
 
   return true;
@@ -347,10 +385,29 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(FsFile& file) {
     for (auto& y : wordYpos) serialization::readPod(file, y);
   }
 
-  // Ruby text data
-  std::vector<std::string> rubyTexts(wc);
-  for (auto& rt : rubyTexts) serialization::readString(file, rt);
+  uint16_t rubyCount = 0;
+  serialization::readPod(file, rubyCount);
+  if (rubyCount > wc) return nullptr;
+  std::vector<RubySpan> rubySpans;
+  // A variable number of annotations must be owned by the deserialized page;
+  // allocate exactly that many, and nothing for a page without ruby.
+  rubySpans.reserve(rubyCount);
+  for (uint16_t i = 0; i < rubyCount; ++i) {
+    RubySpan span;
+    serialization::readPod(file, span.start);
+    serialization::readPod(file, span.count);
+    uint32_t bytes = 0;
+    serialization::readPod(file, bytes);
+    if (span.count == 0 || span.end() > wc || (!rubySpans.empty() && span.start < rubySpans.back().end()) ||
+        bytes == 0 || bytes > Ruby::MAX_READING_BYTES || bytes > file.available()) {
+      LOG_ERR("TXB", "Invalid ruby association in cache");
+      return nullptr;
+    }
+    span.text.resize(bytes);
+    if (file.read(span.text.data(), bytes) != bytes) return nullptr;
+    rubySpans.push_back(std::move(span));
+  }
 
   return std::unique_ptr<TextBlock>(new TextBlock(std::move(words), std::move(wordXpos), std::move(wordStyles),
-                                                  blockStyle, std::move(wordYpos), vertical, std::move(rubyTexts)));
+                                                  blockStyle, std::move(wordYpos), vertical, std::move(rubySpans)));
 }

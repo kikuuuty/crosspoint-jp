@@ -147,7 +147,7 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
     wordStyles.reserve(512);
     wordContinues.reserve(512);
     wordSpaceBefore.reserve(512);
-    // rubyTexts は遅延初期化（setRubyForWordAt時にのみ割り当て）— RAM節約
+    // Ruby spans allocate only for actual source annotations.
   }
 
   words.push_back(std::move(word));
@@ -170,29 +170,27 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   wordVerticalBehaviors.push_back(vBehavior);
 }
 
-void ParsedText::setRubyForWordAt(size_t index, const std::string& ruby) {
-  if (index >= words.size()) return;
-  // 遅延初期化: ルビが初めて設定された時にベクタを拡張
-  if (rubyTexts.size() <= index) {
-    rubyTexts.resize(words.size());
+size_t ParsedText::adjustRubyBreak(const size_t breakAt, const size_t lineStart, const int available,
+                                   const std::vector<uint16_t>& extents, const int spaceWidth,
+                                   const std::vector<bool>* tight) const {
+  const auto measure = [&](const size_t start, const size_t end) {
+    int extent = 0;
+    for (size_t i = start; i < end; ++i) {
+      extent += extents[i];
+      if (i > start && !wordContinues[i] && tight && !(*tight)[i]) extent += spaceWidth;
+    }
+    return extent;
+  };
+  size_t candidate = breakAt;
+  // Pulling a whole group back may expose an opening bracket at the new line
+  // end. Reapply kinsoku until both constraints agree; backward movement is
+  // monotonic, except for restoring a complete first group that fits.
+  for (size_t i = 0; i <= rubySpans.size(); ++i) {
+    const size_t adjusted = Ruby::adjustBreak(rubySpans, candidate, lineStart, available, measure);
+    if (adjusted == candidate || adjusted > candidate) return adjusted;
+    candidate = Kinsoku::adjustBreak(words, wordContinues, adjusted, lineStart);
   }
-  rubyTexts[index] = ruby;
-}
-
-// [start, end) の語に対応するルビを取り出す。
-// rubyTexts は setRubyForWordAt() 時点の words.size() までしか伸びないため、
-// その後 addWord() された語の分は短い。範囲全体を一括判定すると
-// 末尾に語が追加された最終行（縦書きは最終列）だけルビが全て落ちるので、
-// 存在する分だけ取り出し残りは空文字列で埋める。
-// 取り出した範囲は呼び出し側が直後に erase するので、words と同様にムーブで済ませる
-// （SSO を超えるルビ文字列のコピーによる malloc/free を避ける）。
-std::vector<std::string> ParsedText::takeRubyRange(const size_t start, const size_t end) {
-  std::vector<std::string> out(end - start);
-  if (rubyTexts.size() > start) {
-    const size_t avail = std::min(rubyTexts.size(), end) - start;
-    std::move(rubyTexts.begin() + start, rubyTexts.begin() + start + avail, out.begin());
-  }
-  return out;
+  return candidate;
 }
 
 // Consumes data to minimize memory usage
@@ -303,6 +301,7 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
 
   // Remove consumed words so size() reflects only remaining words
   if (lineCount > 0) {
+    hasEmittedLine = true;
     const size_t consumed = lineBreakIndices[lineCount - 1];
     words.erase(words.begin(), words.begin() + consumed);
     wordStyles.erase(wordStyles.begin(), wordStyles.begin() + consumed);
@@ -315,10 +314,7 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
       const size_t vbConsumed = std::min(consumed, wordVerticalBehaviors.size());
       wordVerticalBehaviors.erase(wordVerticalBehaviors.begin(), wordVerticalBehaviors.begin() + vbConsumed);
     }
-    if (!rubyTexts.empty()) {
-      const size_t rtConsumed = std::min(consumed, rubyTexts.size());
-      rubyTexts.erase(rubyTexts.begin(), rubyTexts.begin() + rtConsumed);
-    }
+    Ruby::consume(rubySpans, consumed);
   }
 }
 
@@ -397,7 +393,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
 
   // Compute first-line indent for vertical mode (same conditions as horizontal).
   int verticalIndent = 0;
-  if (firstLineIndent && blockStyle.textIndent == 0 && !blockStyle.textIndentDefined &&
+  if (!hasEmittedLine && firstLineIndent && blockStyle.textIndent == 0 && !blockStyle.textIndentDefined &&
       !startsWithIdeographicSpace(words) &&
       (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)) {
     verticalIndent = cjkCharAdvance > 0 ? cjkCharAdvance : lineHeight;
@@ -416,7 +412,9 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     for (size_t i = 0; i < words.size(); i++) {
       if (currentY + wordHeights[i] > columnHeight && i > columnStart) {
         // 禁則処理（追い出し）。行頭禁則・行末禁則・分離禁止を収束するまで交互に見る。
-        const size_t breakAt = Kinsoku::adjustBreak(words, continuesVec, i, columnStart);
+        const size_t kinsokuBreak = Kinsoku::adjustBreak(words, continuesVec, i, columnStart);
+        const size_t breakAt = adjustRubyBreak(kinsokuBreak, columnStart,
+                                               columnHeight - (columnStart == 0 ? verticalIndent : 0), wordHeights);
         columnEnds.push_back(breakAt);
         columnStart = breakAt;
         currentY = 0;
@@ -436,7 +434,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
   // so the trailing partial column is preserved for the next layout call (avoids visually
   // short columns at flush boundaries). makePages calls use the default true to flush all.
   const size_t totalCols = columnEnds.size();
-  const size_t emitCols = (includeLastColumn || totalCols <= 1) ? totalCols : totalCols - 1;
+  const size_t emitCols = includeLastColumn ? totalCols : (totalCols > 0 ? totalCols - 1 : 0);
 
   // Second pass: emit columns up to emitCols.
   bool isFirstColumn = true;
@@ -450,7 +448,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     std::vector<int16_t> colXpos;
     std::vector<EpdFontFamily::Style> colStyles(wordStyles.begin() + start, wordStyles.begin() + end);
     const size_t count = end - start;
-    std::vector<std::string> colRubyTexts = takeRubyRange(start, end);
+    auto colRubySpans = Ruby::takeRange(rubySpans, start, end);
     colYpos.reserve(count);
     colXpos.resize(count, 0);
 
@@ -461,7 +459,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     }
 
     processColumn(std::make_shared<TextBlock>(std::move(colWords), std::move(colXpos), std::move(colStyles), blockStyle,
-                                              std::move(colYpos), true, std::move(colRubyTexts)));
+                                              std::move(colYpos), true, std::move(colRubySpans)));
     isFirstColumn = false;
     emitStart = end;
   }
@@ -469,6 +467,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
   // Erase only consumed words. Words from emitStart onwards remain in the TextBlock
   // for the next layout call to render together with newly accumulated text.
   if (emitStart > 0) {
+    hasEmittedLine = true;
     words.erase(words.begin(), words.begin() + emitStart);
     wordStyles.erase(wordStyles.begin(), wordStyles.begin() + emitStart);
     wordContinues.erase(wordContinues.begin(), wordContinues.begin() + emitStart);
@@ -480,10 +479,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
       const size_t vbConsumed = std::min(emitStart, wordVerticalBehaviors.size());
       wordVerticalBehaviors.erase(wordVerticalBehaviors.begin(), wordVerticalBehaviors.begin() + vbConsumed);
     }
-    if (!rubyTexts.empty()) {
-      const size_t rtConsumed = std::min(emitStart, rubyTexts.size());
-      rubyTexts.erase(rubyTexts.begin(), rubyTexts.begin() + rtConsumed);
-    }
+    Ruby::consume(rubySpans, emitStart);
   }
 }
 
@@ -511,7 +507,7 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
   const bool isHangingIndent = blockStyle.textIndentDefined && blockStyle.textIndent < 0;
   const bool isFirstLineIndent = firstLineIndent && blockStyle.textIndent > 0;
   const int effectiveIndent =
-      (isHangingIndent || isFirstLineIndent) &&
+      !hasEmittedLine && (isHangingIndent || isFirstLineIndent) &&
               (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)
           ? blockStyle.textIndent
           : 0;
@@ -563,6 +559,8 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
       --currentIndex;
     }
 
+    currentIndex = adjustRubyBreak(currentIndex, lineStart, effectivePageWidth, wordWidths, spaceWidth, &cjkAdjVec);
+
     lineBreakIndices.push_back(currentIndex);
     isFirstLine = false;
   }
@@ -571,9 +569,10 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
 }
 
 void ParsedText::applyParagraphIndent() {
-  if (words.empty()) {
+  if (words.empty() || paragraphIndentApplied || hasEmittedLine) {
     return;
   }
+  paragraphIndentApplied = true;
 
   if (firstLineIndent || blockStyle.textIndentDefined || startsWithIdeographicSpace(words)) {
     // Indent is applied as pixel offset during layout (firstLineIndent toggle or CSS text-indent),
@@ -593,7 +592,7 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
   const bool isHangingIndent2 = blockStyle.textIndentDefined && blockStyle.textIndent < 0;
   const bool isFirstLineIndent2 = firstLineIndent && blockStyle.textIndent > 0;
   const int effectiveIndent =
-      (isHangingIndent2 || isFirstLineIndent2) &&
+      !hasEmittedLine && (isHangingIndent2 || isFirstLineIndent2) &&
               (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)
           ? blockStyle.textIndent
           : 0;
@@ -648,6 +647,8 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
       --currentIndex;
     }
 
+    currentIndex = adjustRubyBreak(currentIndex, lineStart, effectivePageWidth, wordWidths, spaceWidth, &cjkAdjVec);
+
     lineBreakIndices.push_back(currentIndex);
     isFirstLine = false;
   }
@@ -662,6 +663,8 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
   if (availableWidth <= 0 || wordIndex >= words.size()) {
     return false;
   }
+  // A reading cannot be split at an invented Latin hyphenation boundary.
+  if (Ruby::containsWord(rubySpans, wordIndex) && !allowFallbackBreaks) return false;
 
   const std::string& word = words[wordIndex];
   const auto style = wordStyles[wordIndex];
@@ -708,8 +711,12 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
   if (wordIndex + 1 <= wordSpaceBefore.size()) {
     wordSpaceBefore.insert(wordSpaceBefore.begin() + wordIndex + 1, false);
   }
-  if (wordIndex + 1 <= rubyTexts.size()) {
-    rubyTexts.insert(rubyTexts.begin() + wordIndex + 1, "");
+  for (auto& span : rubySpans) {
+    if (span.start > wordIndex) {
+      ++span.start;
+    } else if (wordIndex < span.end()) {
+      ++span.count;  // emergency split of an oversized Latin base, not its reading
+    }
   }
 
   if (continuesVec) {
@@ -749,7 +756,7 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   const bool isHangingIndent3 = blockStyle.textIndentDefined && blockStyle.textIndent < 0;
   const bool isFirstLineIndent3 = firstLineIndent && blockStyle.textIndent > 0;
   const int effectiveIndent =
-      isFirstLine && (isHangingIndent3 || isFirstLineIndent3) &&
+      isFirstLine && !hasEmittedLine && (isHangingIndent3 || isFirstLineIndent3) &&
               (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)
           ? blockStyle.textIndent
           : 0;
@@ -817,7 +824,7 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   std::vector<std::string> lineWords(std::make_move_iterator(words.begin() + lastBreakAt),
                                      std::make_move_iterator(words.begin() + lineBreak));
   std::vector<EpdFontFamily::Style> lineWordStyles(wordStyles.begin() + lastBreakAt, wordStyles.begin() + lineBreak);
-  std::vector<std::string> lineRubyTexts = takeRubyRange(lastBreakAt, lineBreak);
+  auto lineRubySpans = Ruby::takeRange(rubySpans, lastBreakAt, lineBreak);
 
   for (auto& word : lineWords) {
     if (containsSoftHyphen(word)) {
@@ -841,5 +848,5 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   }
 
   processLine(std::make_shared<TextBlock>(std::move(lineWords), std::move(lineXPos), std::move(lineWordStyles),
-                                          lineStyle, std::vector<int16_t>{}, false, std::move(lineRubyTexts)));
+                                          lineStyle, std::vector<int16_t>{}, false, std::move(lineRubySpans)));
 }

@@ -33,6 +33,10 @@ constexpr size_t MIN_FREE_HEAP_FOR_PARSING = 20 * 1024;  // 20KB
 // 超えると _M_realloc_append が発生し、1024 要素分の連続領域（~32KB）を要求してヒープ不足で abort する。
 // 青空文庫のように <p> を持たない超長段落の EPUB で顕在化する（Issue #72）。
 constexpr size_t MID_BLOCK_FLUSH_WORDS = 400;
+// Leave headroom below ParsedText's 512-word allocation. An open ruby cannot
+// be flushed until its reading is known; reject pathological input rather than
+// growing the base queue indefinitely or silently losing the annotation.
+constexpr size_t MAX_OPEN_RUBY_WORDS = 480;
 
 const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote"};
 constexpr int NUM_BLOCK_TAGS = sizeof(BLOCK_TAGS) / sizeof(BLOCK_TAGS[0]);
@@ -189,6 +193,11 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
 
 // flush the contents of partWordBuffer to currentTextBlock
 void ChapterHtmlSlimParser::flushPartWordBuffer() {
+  if (rubyLimitExceeded || (inRuby && currentTextBlock && currentTextBlock->size() >= MAX_OPEN_RUBY_WORDS)) {
+    rubyLimitExceeded = true;
+    partWordBufferIndex = 0;
+    return;
+  }
   // Determine font style from depth-based tracking and CSS effective style
   const bool isBold = boldUntilDepth < depth || effectiveBold;
   const bool isItalic = italicUntilDepth < depth || effectiveItalic;
@@ -730,15 +739,51 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // Ruby tag handling
   if (strcmp(name, "ruby") == 0) {
     self->flushPartWordBuffer();
-    self->inRuby = true;
-    self->rubyStartWordIndex = self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : 0;
-    self->rubyTextBuffer.clear();
+    if (self->inRuby) {
+      // Preserve nested base text, but do not mix secondary readings into the
+      // outer association. Multi-level ruby is not rendered.
+      ++self->nestedRuby;
+    } else {
+      if (self->currentTextBlock && self->currentTextBlock->size() >= MID_BLOCK_FLUSH_WORDS / 2) {
+        self->flushCurrentBlockMidPage();
+      }
+      self->inRuby = true;
+      self->rubyDepth = self->depth;
+      self->rubyRtcSeen = false;
+      self->rubyParser.begin(self->currentTextBlock ? self->currentTextBlock->size() : 0);
+    }
     self->depth += 1;
     return;
   }
+  if (strcmp(name, "rb") == 0 && self->inRuby && self->nestedRuby == 0) {
+    self->flushPartWordBuffer();
+    self->rubyParser.beginBase(self->currentTextBlock->size());
+    self->rubyRbDepth = self->depth;
+    self->depth += 1;
+    return;
+  }
+  if (strcmp(name, "rtc") == 0 && self->inRuby) {
+    if (self->rubyRtcSeen) {
+      self->skipUntilDepth = self->depth;
+      self->depth += 1;
+      return;
+    }
+    self->rubyRtcSeen = true;
+  }
   if (strcmp(name, "rt") == 0) {
     self->flushPartWordBuffer();
-    self->collectingRubyText = true;
+    if (!self->inRuby || self->nestedRuby > 0) {
+      self->skipUntilDepth = self->depth;
+    } else {
+      size_t baseSpan = 1;
+      if (const char* value = getAttribute(atts, "rbspan")) {
+        const long parsed = strtol(value, nullptr, 10);
+        if (parsed > 0 && parsed <= static_cast<long>(MAX_OPEN_RUBY_WORDS)) baseSpan = parsed;
+      }
+      self->rubyParser.beginReading(self->currentTextBlock->size(), baseSpan);
+      self->collectingRubyText = true;
+      self->rubyRtDepth = self->depth;
+    }
     self->depth += 1;
     return;
   }
@@ -1120,6 +1165,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
 void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  if (self->rubyLimitExceeded) return;
 
   // Skip content of nested table
   if (self->tableDepth > 1) {
@@ -1146,7 +1192,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
 
   // Collect ruby text instead of normal word processing
   if (self->collectingRubyText) {
-    self->rubyTextBuffer.append(s, len);
+    if (!self->rubyParser.append(s, static_cast<size_t>(len))) self->rubyLimitExceeded = true;
     return;
   }
 
@@ -1165,6 +1211,10 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
 
   int i = 0;
   while (i < len) {
+    if (self->inRuby && self->currentTextBlock->size() >= MAX_OPEN_RUBY_WORDS) {
+      self->rubyLimitExceeded = true;
+      return;
+    }
     // <pre> の中では空白と改行を原文のまま残す。
     if (self->preUntilDepth < self->depth && isWhitespace(s[i])) {
       if (s[i] == '\r') {
@@ -1375,6 +1425,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
 // characterData のループ内でも呼ばれるため、境界での partial column を残す (includeLast=false)。
 void ChapterHtmlSlimParser::flushCurrentBlockMidPage() {
   if (!currentTextBlock || currentTextBlock->isEmpty()) return;
+  if (inRuby) return;  // base indices must stay valid until all <rt> have closed
 
   if (verticalMode) {
     currentTextBlock->layoutVerticalColumns(
@@ -1496,42 +1547,25 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   self->depth -= 1;
 
   // Ruby closing tags
-  if (strcmp(name, "rt") == 0) {
-    self->collectingRubyText = false;
+  if (strcmp(name, "rb") == 0 && self->inRuby && self->depth == self->rubyRbDepth) {
+    self->flushPartWordBuffer();
+    self->rubyParser.endBase(self->currentTextBlock->size());
+    self->rubyRbDepth = -1;
   }
-  if (strcmp(name, "ruby") == 0 && self->inRuby && self->currentTextBlock) {
-    const int currentWordCount = static_cast<int>(self->currentTextBlock->size());
-    const int baseWordCount = currentWordCount - self->rubyStartWordIndex;
-    if (baseWordCount > 0 && !self->rubyTextBuffer.empty()) {
-      // Count UTF-8 characters in ruby text
-      std::vector<size_t> charOffsets;
-      const char* p = self->rubyTextBuffer.c_str();
-      while (*p) {
-        charOffsets.push_back(p - self->rubyTextBuffer.c_str());
-        if ((*p & 0x80) == 0)
-          p += 1;
-        else if ((*p & 0xE0) == 0xC0)
-          p += 2;
-        else if ((*p & 0xF0) == 0xE0)
-          p += 3;
-        else
-          p += 4;
-      }
-      charOffsets.push_back(self->rubyTextBuffer.size());
-      const int rubyCharCount = static_cast<int>(charOffsets.size() - 1);
-
-      for (int i = 0; i < baseWordCount; i++) {
-        const int start = i * rubyCharCount / baseWordCount;
-        const int end = (i + 1) * rubyCharCount / baseWordCount;
-        if (start < end) {
-          std::string portion = self->rubyTextBuffer.substr(charOffsets[start], charOffsets[end] - charOffsets[start]);
-          self->currentTextBlock->setRubyForWordAt(self->rubyStartWordIndex + i, portion);
-        }
-      }
+  if (strcmp(name, "rt") == 0 && self->collectingRubyText && self->depth == self->rubyRtDepth) {
+    self->rubyParser.endReading(self->currentTextBlock->getRubySpans(), self->currentTextBlock->size());
+    self->collectingRubyText = false;
+    self->rubyRtDepth = -1;
+  }
+  if (strcmp(name, "ruby") == 0 && self->inRuby && self->currentTextBlock && self->skipUntilDepth >= self->depth) {
+    self->flushPartWordBuffer();
+    if (self->depth == self->rubyDepth) {
+      self->inRuby = false;
+      self->rubyDepth = -1;
+      if (self->currentTextBlock->size() >= MID_BLOCK_FLUSH_WORDS) self->flushCurrentBlockMidPage();
+    } else if (self->nestedRuby > 0) {
+      --self->nestedRuby;
     }
-    self->inRuby = false;
-    self->rubyStartWordIndex = -1;
-    self->rubyTextBuffer.clear();
   }
 
   // Closing a footnote link — create entry from collected text and href
@@ -1703,6 +1737,14 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
     SECTION_PERF_BEGIN(parseStartUs);
     const XML_Status parseStatus = XML_ParseBuffer(parser, static_cast<int>(len), done);
     SECTION_PERF_END(parseStartUs, parseUs);
+
+    if (rubyLimitExceeded) {
+      LOG_ERR("EHP", "Ruby exceeds bounded parsing budget (%u base words / %u reading bytes)",
+              static_cast<unsigned>(MAX_OPEN_RUBY_WORDS), static_cast<unsigned>(RubyParser::MAX_READING_BYTES));
+      XML_ParserFree(parser);
+      file.close();
+      return false;
+    }
 
     if (parseStatus == XML_STATUS_ERROR) {
       LOG_ERR("EHP", "Parse error at line %lu:\n%s", XML_GetCurrentLineNumber(parser),

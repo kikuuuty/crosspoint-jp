@@ -104,9 +104,23 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-> 現在の形式は **Version 42**（`lib/Epub/Epub/Section.cpp` の `SECTION_FILE_VERSION`。
+> 現在の形式は **Version 43**（`lib/Epub/Epub/Section.cpp` の `SECTION_FILE_VERSION`。
 > バージョンごとの変更理由は同ファイル冒頭のコメントにある）。以下の ImHex パターンは
 > Version 8 のときのもので、ブロックスタイルなど以降に追加されたフィールドを含まない。
+
+### Version 43: sparse ruby associations
+
+Each `TextBlock`, after its vertical-layout data, stores:
+
+- `u16 rubyCount` (zero for text without ruby).
+- For each annotation: `u16 startWord`, `u16 baseWordCount`, then a UTF-8
+  string (`u32 byteLength` followed by its bytes).
+
+Ranges are ordered, non-overlapping, and relative to the line/column's words.
+One-character bases retain mono ruby; multi-character bases retain group ruby.
+The old per-word array of ruby strings is no longer written. Version 42 section
+caches are automatically invalidated; book metadata and reading progress are
+unchanged.
 
 ### Version 8
 

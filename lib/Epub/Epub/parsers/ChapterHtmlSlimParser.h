@@ -11,6 +11,7 @@
 
 #include "../FootnoteEntry.h"
 #include "../ParsedText.h"
+#include "../RubyParser.h"
 #include "../blocks/ImageBlock.h"
 #include "../blocks/TextBlock.h"
 #include "../css/CssParser.h"
@@ -59,9 +60,14 @@ class ChapterHtmlSlimParser {
   int16_t currentPageNextX = 0;  // vertical mode: next column x position (decreases right-to-left)
   // Ruby text state
   bool inRuby = false;
-  int rubyStartWordIndex = -1;
   bool collectingRubyText = false;
-  std::string rubyTextBuffer;
+  int rubyDepth = -1;
+  int rubyRtDepth = -1;
+  int rubyRbDepth = -1;
+  int nestedRuby = 0;
+  bool rubyRtcSeen = false;
+  bool rubyLimitExceeded = false;
+  RubyParser rubyParser;
   int fontId;
   int headingFontIds[6] = {0, 0, 0, 0, 0, 0};  // per heading level (h1-h6), 0 = use page fontId
   float lineCompression;

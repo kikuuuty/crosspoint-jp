@@ -21,11 +21,15 @@ class ParsedText {
   // wordContinues は CJK 語では常に false で、「空白があったか」を区別できない。
   // これが無いと CJK どうしの字間をゼロにする規則が、原文の空白まで飲んでしまう。
   std::vector<bool> wordSpaceBefore;
-  std::vector<std::string> rubyTexts;  // words と並列、ルビなしは空文字列
+  std::vector<RubySpan> rubySpans;  // sparse source-level base/reading associations
   std::vector<VerticalTextUtils::VerticalBehavior> wordVerticalBehaviors;
   BlockStyle blockStyle;
   bool firstLineIndent;
   bool hyphenationEnabled;
+  // Ruby-safe intermediate flushes must not reapply paragraph-first-line
+  // indentation to the retained partial line/column.
+  bool hasEmittedLine = false;
+  bool paragraphIndentApplied = false;
   // リスト項目のぶら下げ幅をマーカー語の実測幅に合わせ直したか。
   // 中間 flush で同じブロックに対して複数回レイアウトが走るので、1 度だけ行う。
   bool hangIndentAligned = false;
@@ -49,7 +53,8 @@ class ParsedText {
                    const std::function<void(std::shared_ptr<TextBlock>)>& processLine, const GfxRenderer& renderer,
                    int fontId);
   std::vector<uint16_t> calculateWordWidths(const GfxRenderer& renderer, int fontId);
-  std::vector<std::string> takeRubyRange(size_t start, size_t end);
+  size_t adjustRubyBreak(size_t breakAt, size_t lineStart, int available, const std::vector<uint16_t>& extents,
+                         int spaceWidth = 0, const std::vector<bool>* tight = nullptr) const;
 
  public:
   explicit ParsedText(const bool hyphenationEnabled = false, const BlockStyle& blockStyle = BlockStyle(),
@@ -64,7 +69,7 @@ class ParsedText {
   void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
-  void setRubyForWordAt(size_t index, const std::string& ruby);
+  std::vector<RubySpan>& getRubySpans() { return rubySpans; }
   bool isEmpty() const { return words.empty(); }
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>)>& processLine,
