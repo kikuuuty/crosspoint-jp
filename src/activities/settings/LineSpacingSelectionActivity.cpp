@@ -38,9 +38,9 @@ void LineSpacingSelectionActivity::adjustValue(const int delta) {
 }
 
 void LineSpacingSelectionActivity::loop() {
-  // This sub-page is opened from Settings on Confirm *press*.
-  // Using release events here would consume the same key-up and immediately exit.
-  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+  // ActivityManager suppresses the opening gesture through its release, even
+  // when Settings opens this screen on Confirm press.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     onCancel();
     return;
   }

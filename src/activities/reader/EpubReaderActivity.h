@@ -9,6 +9,7 @@
 #include "activities/Activity.h"
 
 class EpubReaderActivity final : public Activity {
+  friend class EpubReaderMenuActivity;
   std::shared_ptr<Epub> epub;
   std::unique_ptr<Section> section = nullptr;
   int currentSpineIndex = 0;
@@ -28,7 +29,6 @@ class EpubReaderActivity final : public Activity {
   // Normalized 0.0-1.0 progress within the target spine item, computed from book percentage.
   float pendingSpineProgress = 0.0f;
   bool pendingScreenshot = false;
-  bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
   bool automaticPageTurnActive = false;
   bool verticalMode = false;  // resolved effective writing mode for current book
 
@@ -54,8 +54,8 @@ class EpubReaderActivity final : public Activity {
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
   void invalidateSectionPreservingPosition();
-  void onReaderMenuBack(uint8_t orientation);
-  void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
+  bool resolveVerticalMode() const;
+  void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action, EpubReaderMenuActivity& menu);
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void pageTurn(bool isForwardTurn);

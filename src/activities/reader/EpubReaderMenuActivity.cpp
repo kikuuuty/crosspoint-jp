@@ -8,6 +8,7 @@
 #include <cstdio>
 
 #include "CrossPointSettings.h"
+#include "EpubReaderActivity.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -15,8 +16,10 @@
 EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                const std::string& title, const int currentPage, const int totalPages,
                                                const int bookProgressPercent, const uint8_t currentOrientation,
-                                               const bool hasFootnotes, const bool verticalMode)
+                                               const bool hasFootnotes, const bool verticalMode,
+                                               EpubReaderActivity& reader)
     : Activity("EpubReaderMenu", renderer, mappedInput),
+      reader(reader),
       menuItems(buildMenuItems(hasFootnotes)),
       title(title),
       pendingOrientation(currentOrientation),
@@ -58,6 +61,26 @@ void EpubReaderMenuActivity::onEnter() {
 }
 
 void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
+
+void EpubReaderMenuActivity::closeMenu(bool cancelled) {
+  ActivityResult result;
+  result.isCancelled = cancelled;
+  result.data = MenuResult{-1, pendingOrientation, selectedPageTurnOption, readerSettingsChanged};
+  setResult(std::move(result));
+  finish();
+}
+
+void EpubReaderMenuActivity::markSettingsChanged() { readerSettingsChanged = true; }
+
+void EpubReaderMenuActivity::refreshSettings(uint8_t previousOrientation, bool isVertical) {
+  RenderLock lock(*this);
+  // Keep an uncommitted menu rotation unless Settings actually changed it.
+  if (SETTINGS.orientation != previousOrientation) {
+    pendingOrientation = SETTINGS.orientation;
+  }
+  verticalMode = isVertical;
+  readerSettingsChanged = true;
+}
 
 void EpubReaderMenuActivity::loop() {
   if (skipNextButtonCheck) {
@@ -105,15 +128,20 @@ void EpubReaderMenuActivity::loop() {
       return;
     }
 
-    setResult(MenuResult{static_cast<int>(selectedAction), pendingOrientation, selectedPageTurnOption});
-    finish();
+    // Keep this menu on the stack while a child is open. Only successful
+    // navigation (chapter/percent/footnote/sync) or an explicit exit closes it.
+    if ((selectedAction == MenuAction::GO_HOME || selectedAction == MenuAction::DELETE_CACHE) &&
+        SETTINGS.orientation != pendingOrientation) {
+      // Replace clears the stack without delivering a menu result. Persist the
+      // rotation, but do not discard the section needed by Delete Cache.
+      SETTINGS.orientation = pendingOrientation;
+      SETTINGS.saveToFile();
+    }
+    reader.onReaderMenuConfirm(selectedAction, *this);
+    requestUpdate();
     return;
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    result.data = MenuResult{-1, pendingOrientation, selectedPageTurnOption};
-    setResult(std::move(result));
-    finish();
+    closeMenu(true);
     return;
   }
 }
@@ -173,7 +201,9 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
 
     if (menuItems[i].action == MenuAction::AUTO_PAGE_TURN) {
       // Render current page turn value on the right edge of the content area.
-      const auto pageTurnValue = pageTurnLabels[selectedPageTurnOption];
+      // Settings can change the language while this menu remains on the stack.
+      const auto pageTurnValue =
+          selectedPageTurnOption == 0 ? tr(STR_STATE_OFF) : pageTurnLabels[selectedPageTurnOption];
       const auto pageTurnWidth = renderer.getTextWidth(UI_10_FONT_ID, pageTurnValue);
       renderer.drawText(UI_10_FONT_ID, contentX + contentWidth - 20 - pageTurnWidth, displayY, pageTurnValue,
                         !isSelected);

@@ -3,6 +3,8 @@
 #include <HalGPIO.h>
 #include <I18n.h>
 
+#include "util/InputTransitionGuard.h"
+
 class MappedInputManager {
  public:
   // Up/Down は「側面ボタンの並びの先頭側／末尾側」を指す論理ボタン。
@@ -33,7 +35,8 @@ class MappedInputManager {
 
   explicit MappedInputManager(HalGPIO& gpio) : gpio(gpio) {}
 
-  void update() { gpio.update(); }
+  void update();
+  void suppressUntilRelease() { transitionGuard.suppressUntilRelease(); }
   bool wasPressed(Button button) const;
   bool wasReleased(Button button) const;
   bool isPressed(Button button) const;
@@ -57,6 +60,7 @@ class MappedInputManager {
 
  private:
   HalGPIO& gpio;
+  InputTransitionGuard transitionGuard;
   Orientation effectiveOrientation = Orientation::Portrait;
 
   bool mapButton(Button button, bool (HalGPIO::*fn)(uint8_t) const) const;
