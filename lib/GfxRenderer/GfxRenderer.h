@@ -264,6 +264,13 @@ class GfxRenderer {
   void drawTextVertical(int fontId, int x, int y, const char* text, bool black = true,
                         EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
 
+  // Center a complete source reading over its base range, then move inward at
+  // line edges. Limits are exclusive and run along the writing axis. If even
+  // tightly set ruby does not fit, resample glyphs uniformly without a temporary
+  // bitmap or string, preserving all reading characters and grayscale passes.
+  void drawRubyText(int fontId, int x, int y, const char* text, bool vertical, int baseStart, int baseEnd,
+                    int limitStart, int limitEnd) const;
+
   // Draw text rotated 90° CW, progressing top-to-bottom (for Sideways words in vertical text)
   // columnWidth: the CJK column width to center the rotated text within (0 = no centering)
   void drawTextSideways(int fontId, int x, int y, const char* text, bool black = true,

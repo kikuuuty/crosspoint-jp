@@ -11,6 +11,8 @@
 #include <algorithm>
 
 #include "FontCacheManager.h"
+#include "RubyPlacement.h"
+#include "RubyRaster.h"
 #include "VerticalTextUtils.h"
 
 // Built-in CJK UI font (embedded in flash) - 20px only
@@ -1886,6 +1888,137 @@ int GfxRenderer::getTextHeight(const int fontId) const {
     return 0;
   }
   return fontMap.at(effectiveFontId).getData(EpdFontFamily::REGULAR)->ascender;
+}
+
+void GfxRenderer::drawRubyText(const int fontId, const int x, const int y, const char* text, const bool vertical,
+                               const int baseStart, const int baseEnd, const int limitStart, const int limitEnd) const {
+  if (!text || !*text) return;
+  if (fontCacheManager_ && fontCacheManager_->isScanning()) {
+    fontCacheManager_->recordText(text, fontId, EpdFontFamily::REGULAR);
+    return;
+  }
+  if (limitEnd <= limitStart) return;
+  const int effectiveFontId = getEffectiveFontId(fontId);
+  const auto it = fontMap.find(effectiveFontId);
+  if (it == fontMap.end()) return;
+  const auto& font = it->second;
+  const auto* data = font.getData(EpdFontFamily::REGULAR);
+  const int rubyLineHeight = getLineHeight(fontId);
+  const uint16_t fontScale = getSdCardFontScale(effectiveFontId);
+  const auto scaled = [fontScale](const int value) { return (value * static_cast<int>(fontScale) + 128) >> 8; };
+  auto& fontManager = FontManager::getInstance();
+  ExternalFont* external =
+      isReaderFont(fontId) && fontManager.isExternalFontEnabled() ? fontManager.getActiveFont() : nullptr;
+  SdCardFont* sdFont = nullptr;
+  if (vertical) {
+    const auto sd = sdCardFonts_.find(effectiveFontId);
+    if (sd != sdCardFonts_.end() && sd->second->hasVertData()) {
+      sdFont = sd->second;
+      sdFont->loadVertData(EpdFontFamily::REGULAR);
+    }
+  }
+
+  // Two streaming passes: measure the real cell/ink union, then resample each
+  // glyph directly into the framebuffer. No per-glyph vector, combined reading
+  // string, offscreen bitmap, or mutation of the shared font scale is needed.
+  int naturalMin = 0;
+  int naturalMax = 0;
+  int naturalLength = 0;
+  RubyPlacement placement{0, 0};
+  for (int pass = 0; pass < 2; ++pass) {
+    int pen = 0;
+    const auto* ptr = reinterpret_cast<const uint8_t*>(text);
+    while (const uint32_t cp = utf8NextCodepoint(&ptr)) {
+      EpdGlyph rowGlyph{};
+      const uint8_t* rowBitmap = nullptr;
+      int rowStride = 0;
+      uint8_t rowMinX = 0;
+      uint8_t rowAdvance = 0;
+      if (external) {
+        rowBitmap = external->getGlyph(cp);
+        if (rowBitmap) {
+          rowAdvance = external->getCharWidth();
+          external->getGlyphMetrics(cp, &rowMinX, &rowAdvance);
+          rowGlyph.width = external->getCharWidth() - rowMinX;
+          rowGlyph.height = external->getCharHeight();
+          rowStride = external->getBytesPerRow();
+        } else if (CjkUiFont20::hasCjkUiGlyph(cp)) {
+          rowBitmap = CjkUiFont20::getCjkUiGlyph(cp);
+          rowAdvance = builtinCjkAdvance(cp);
+          rowGlyph.width = CjkUiFont20::CJK_UI_FONT_WIDTH;
+          rowGlyph.height = CjkUiFont20::CJK_UI_FONT_HEIGHT;
+          rowStride = CjkUiFont20::CJK_UI_FONT_BYTES_PER_ROW;
+        }
+        rowGlyph.advanceX = fp4::fromPixel(rowAdvance);
+        rowGlyph.top = data->ascender - 4;  // existing external/UI baseline adjustment
+      }
+      const EpdGlyph* glyph = rowBitmap ? &rowGlyph : font.getGlyph(cp, EpdFontFamily::REGULAR);
+      if (!glyph) glyph = font.getGlyph('?', EpdFontFamily::REGULAR);
+      if (!glyph) continue;
+      const int advance = std::max(0, scaled(fp4::toPixel(glyph->advanceX)));
+      const uint8_t* vertBitmap = nullptr;
+      if (!rowBitmap && sdFont && VerticalTextUtils::shouldUseVertGlyph(cp)) {
+        if (const auto* substitute = sdFont->getVertGlyph(cp, EpdFontFamily::REGULAR)) {
+          vertBitmap = sdFont->getVertBitmap(substitute, EpdFontFamily::REGULAR);
+          if (vertBitmap) glyph = substitute;
+        }
+      }
+      int left = scaled(glyph->left);
+      int top = scaled(data->ascender) - scaled(glyph->top);
+      if (vertical && !vertBitmap && VerticalTextUtils::isSmallKana(cp)) {
+        left += (advance * VerticalTextUtils::SMALL_KANA_DX_PERCENT + 50) / 100;
+        top -= (advance * VerticalTextUtils::SMALL_KANA_DY_PERCENT + 50) / 100;
+      }
+      const int width = scaled(glyph->width);
+      const int height = scaled(glyph->height);
+      const int axis = pen + (vertical ? top : left);
+      const int extent = vertical ? height : width;
+      if (pass == 0) {
+        if (width > 0 && height > 0) {
+          naturalMin = std::min(naturalMin, axis);
+          naturalMax = std::max(naturalMax, axis + extent);
+        }
+        pen += advance;  // tight ruby: do not inherit body character spacing
+        continue;
+      }
+
+      const uint8_t* bitmap = rowBitmap ? rowBitmap : (vertBitmap ? vertBitmap : getGlyphBitmap(data, glyph));
+      if (bitmap && glyph->width > 0 && glyph->height > 0 && width > 0 && height > 0) {
+        const int axisOffset = axis - naturalMin;
+        const int axis0 = placement.start + axisOffset * placement.length / naturalLength;
+        const int axis1 =
+            placement.start + ((axisOffset + extent) * placement.length + naturalLength - 1) / naturalLength;
+        const int cross = (vertical ? left : top) * placement.length / naturalLength;
+        const int crossExtent = std::max(1, (vertical ? width : height) * placement.length / naturalLength);
+        const int drawX = vertical ? x + cross : axis0;
+        // Keep shortened horizontal ruby against the base, not at the top of
+        // the old full-height ruby cell.
+        const int crossY = y + rubyLineHeight - rubyLineHeight * placement.length / naturalLength;
+        const int drawY = vertical ? axis0 : crossY + cross;
+        const int drawW = vertical ? crossExtent : axis1 - axis0;
+        const int drawH = vertical ? axis1 - axis0 : crossExtent;
+        const RubyBitmapView view{bitmap, glyph->width, glyph->height, data->is2Bit, rowStride, rowMinX};
+        drawRubyBitmap(view, drawX, drawY, drawW, drawH, vertical, limitStart, limitEnd,
+                       [this](const int px, const int py, const uint8_t opacity) {
+                         const uint8_t bmpVal = 3 - opacity;
+                         if (renderMode == BW) {
+                           if (isGlyphInk(bmpVal)) drawPixel(px, py, true);
+                         } else {
+                           const uint8_t val = darkMode ? 3 - bmpVal : bmpVal;
+                           const bool bit = renderMode == GRAYSCALE_LSB ? (val & 1) : ((val >> 1) & 1);
+                           drawPixel(px, py, !bit);
+                         }
+                       });
+      }
+      pen += advance;
+    }
+    if (pass == 0) {
+      naturalMax = std::max(naturalMax, pen);
+      naturalLength = naturalMax - naturalMin;
+      placement = placeRuby(baseStart, baseEnd, naturalLength, limitStart, limitEnd);
+      if (naturalLength <= 0 || placement.length <= 0) return;
+    }
+  }
 }
 
 void GfxRenderer::drawTextVertical(const int fontId, const int x, const int y, const char* text, const bool black,
