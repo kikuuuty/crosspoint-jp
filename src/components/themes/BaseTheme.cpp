@@ -121,19 +121,30 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   // Draw Progress Text
   const auto screenHeight = renderer.getScreenHeight();
   auto textY = screenHeight - UITheme::getInstance().getStatusBarHeight() - orientedMarginBottom - paddingBottom - 4;
+  const bool showBatteryPercentage =
+      SETTINGS.hideBatteryPercentage == CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
+  // Reserve space for 100% so the chapter counter stays fixed as the battery level changes.
+  const int batterySize =
+      SETTINGS.statusBarBattery
+          ? metrics.batteryWidth + (showBatteryPercentage ? renderer.getTextWidth(SMALL_FONT_ID, "100%") + 5 : 4)
+          : 0;
+  int leftContentWidth = batterySize;
   int progressTextWidth = 0;
 
-  if (SETTINGS.statusBarBookProgressPercentage || SETTINGS.statusBarChapterPageCount) {
-    // Right aligned text for progress counter
-    char progressStr[32];
+  if (SETTINGS.statusBarChapterPageCount) {
+    // Left align the chapter counter after the battery, or at the left edge when hidden.
+    char pageStr[32];
+    snprintf(pageStr, sizeof(pageStr), "%d/%d", currentPage, pageCount);
+    const int pageXOffset = batterySize > 0 ? batterySize + 10 : 0;
+    renderer.drawText(SMALL_FONT_ID, metrics.statusBarHorizontalMargin + orientedMarginLeft + pageXOffset, textY,
+                      pageStr);
+    leftContentWidth = pageXOffset + renderer.getTextWidth(SMALL_FONT_ID, pageStr);
+  }
 
-    if (SETTINGS.statusBarBookProgressPercentage && SETTINGS.statusBarChapterPageCount) {
-      snprintf(progressStr, sizeof(progressStr), "%d/%d  %.0f%%", currentPage, pageCount, bookProgress);
-    } else if (SETTINGS.statusBarBookProgressPercentage) {
-      snprintf(progressStr, sizeof(progressStr), "%.0f%%", bookProgress);
-    } else {
-      snprintf(progressStr, sizeof(progressStr), "%d/%d", currentPage, pageCount);
-    }
+  if (SETTINGS.statusBarBookProgressPercentage) {
+    // Keep the book progress percentage right aligned.
+    char progressStr[32];
+    snprintf(progressStr, sizeof(progressStr), "%.0f%%", bookProgress);
 
     progressTextWidth = renderer.getTextWidth(SMALL_FONT_ID, progressStr);
     renderer.drawText(
@@ -166,8 +177,6 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   }
 
   // Draw Battery
-  const bool showBatteryPercentage =
-      SETTINGS.hideBatteryPercentage == CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
   if (SETTINGS.statusBarBattery) {
     GUI.drawBatteryLeft(renderer,
                         Rect{metrics.statusBarHorizontalMargin + orientedMarginLeft + 1, textY, metrics.batteryWidth,
@@ -183,8 +192,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     const int rendererableScreenWidth =
         renderer.getScreenWidth() - (metrics.statusBarHorizontalMargin * 2) - orientedMarginLeft - orientedMarginRight;
 
-    const int batterySize = SETTINGS.statusBarBattery ? (showBatteryPercentage ? 50 : 20) : 0;
-    const int titleMarginLeft = batterySize + 30;
+    const int titleMarginLeft = leftContentWidth + 30;
     const int titleMarginRight = progressTextWidth + 30;
 
     // Attempt to center title on the screen, but if title is too wide then later we will center it within the
