@@ -8,6 +8,8 @@
 #include "../Activity.h"
 #include "util/ButtonNavigator.h"
 
+class EpubReaderActivity;
+
 class EpubReaderMenuActivity final : public Activity {
  public:
   // Menu actions available from the reader menu.
@@ -33,7 +35,13 @@ class EpubReaderMenuActivity final : public Activity {
 
   explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                   const int currentPage, const int totalPages, const int bookProgressPercent,
-                                  const uint8_t currentOrientation, const bool hasFootnotes, const bool verticalMode);
+                                  const uint8_t currentOrientation, const bool hasFootnotes, const bool verticalMode,
+                                  EpubReaderActivity& reader);
+
+  void closeMenu(bool cancelled = false);
+  void markSettingsChanged();
+  void refreshSettings(uint8_t previousOrientation, bool isVertical);
+  bool isVerticalMode() const { return verticalMode; }
 
   void onEnter() override;
   void onExit() override;
@@ -52,6 +60,9 @@ class EpubReaderMenuActivity final : public Activity {
   static std::vector<MenuItem> buildMenuItems(bool hasFootnotes);
 
   // Fixed menu layout
+  // The reader outlives its menu on the activity stack; no extra owning callback
+  // or book/layout copy is needed to launch children from this menu.
+  EpubReaderActivity& reader;
   const std::vector<MenuItem> menuItems;
   int selectedIndex = 0;
 
@@ -61,12 +72,13 @@ class EpubReaderMenuActivity final : public Activity {
   uint8_t selectedPageTurnOption = 0;
   const std::vector<StrId> orientationLabels = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_INVERTED,
                                                 StrId::STR_LANDSCAPE_CCW};
-  const std::vector<const char*> pageTurnLabels = {I18N.get(StrId::STR_STATE_OFF), "1", "3", "6", "12"};
+  const std::vector<const char*> pageTurnLabels = {"", "1", "3", "6", "12"};
   int currentPage = 0;
   int totalPages = 0;
   int bookProgressPercent = 0;
   bool skipNextButtonCheck = true;
   bool verticalMode = false;
+  bool readerSettingsChanged = false;
 
   std::string getMenuItemValue(MenuAction action) const;
 };

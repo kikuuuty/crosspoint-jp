@@ -1,5 +1,7 @@
 #include "MappedInputManager.h"
 
+#include <initializer_list>
+
 #include "CrossPointSettings.h"
 
 namespace {
@@ -25,6 +27,17 @@ constexpr SidePair kSideX3{HalGPIO::BTN_UP, HalGPIO::BTN_DOWN};
 // Physical buttons reverse left-to-right when the device is held upside down.
 constexpr ButtonIndex mirrorFront(ButtonIndex idx) { return 3 - idx; }
 }  // namespace
+
+void MappedInputManager::update() {
+  gpio.update();
+  bool anyHeld = false;
+  for (const auto button :
+       {Button::Back, Button::Confirm, Button::Left, Button::Right, Button::Up, Button::Down, Button::Power}) {
+    // Inspect the raw state, not isPressed(), which is suppressed during transitions.
+    anyHeld = anyHeld || mapButton(button, &HalGPIO::isPressed);
+  }
+  transitionGuard.update(anyHeld, gpio.wasAnyPressed() || gpio.wasAnyReleased());
+}
 
 bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint8_t) const) const {
   const auto sideLayout = static_cast<CrossPointSettings::SIDE_BUTTON_LAYOUT>(SETTINGS.sideButtonLayout);
@@ -95,17 +108,25 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
   return false;
 }
 
-bool MappedInputManager::wasPressed(const Button button) const { return mapButton(button, &HalGPIO::wasPressed); }
+bool MappedInputManager::wasPressed(const Button button) const {
+  return !transitionGuard.isSuppressed() && mapButton(button, &HalGPIO::wasPressed);
+}
 
-bool MappedInputManager::wasReleased(const Button button) const { return mapButton(button, &HalGPIO::wasReleased); }
+bool MappedInputManager::wasReleased(const Button button) const {
+  return !transitionGuard.isSuppressed() && mapButton(button, &HalGPIO::wasReleased);
+}
 
-bool MappedInputManager::isPressed(const Button button) const { return mapButton(button, &HalGPIO::isPressed); }
+bool MappedInputManager::isPressed(const Button button) const {
+  return !transitionGuard.isSuppressed() && mapButton(button, &HalGPIO::isPressed);
+}
 
-bool MappedInputManager::wasAnyPressed() const { return gpio.wasAnyPressed(); }
+bool MappedInputManager::wasAnyPressed() const { return !transitionGuard.isSuppressed() && gpio.wasAnyPressed(); }
 
-bool MappedInputManager::wasAnyReleased() const { return gpio.wasAnyReleased(); }
+bool MappedInputManager::wasAnyReleased() const { return !transitionGuard.isSuppressed() && gpio.wasAnyReleased(); }
 
-unsigned long MappedInputManager::getHeldTime() const { return gpio.getHeldTime(); }
+unsigned long MappedInputManager::getHeldTime() const {
+  return transitionGuard.isSuppressed() ? 0 : gpio.getHeldTime();
+}
 
 MappedInputManager::Labels MappedInputManager::mapLabels(const char* back, const char* confirm, const char* previous,
                                                          const char* next) const {
@@ -165,6 +186,7 @@ StrId MappedInputManager::sideButtonPositionLabel(const Button button) const {
 }
 
 int MappedInputManager::getPressedFrontButton() const {
+  if (transitionGuard.isSuppressed()) return -1;
   // Scan the raw front buttons in hardware order.
   // This bypasses remapping so the remap activity can capture physical presses.
   if (gpio.wasPressed(HalGPIO::BTN_BACK)) {

@@ -94,6 +94,7 @@ void ActivityManager::loop() {
         // 決めるので、Portrait の UI サブアクティビティから横向きのリーダーへ戻るときも
         // ここで正しく回転する。
         OrientationHelper::applyOrientation(renderer, mappedInput, currentActivity.get());
+        mappedInput.suppressUntilRelease();
         // Handle result if necessary
         if (currentActivity->resultHandler) {
           LOG_DBG("ACT", "Handling result for popped activity");
@@ -140,6 +141,7 @@ void ActivityManager::loop() {
       // RenderLock を保持したまま行う（適用は enum の代入だけでロックを取らない）。
       // unlock 後に行うと、残っていた描画通知でレンダータスクが旧向きのまま 1 フレーム描き得る。
       OrientationHelper::applyOrientation(renderer, mappedInput, currentActivity.get());
+      mappedInput.suppressUntilRelease();
 
       lock.unlock();  // onEnter may acquire its own lock
       currentActivity->onEnter();
@@ -179,6 +181,8 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
     currentActivity = std::move(newActivity);
     // 起動直後（Boot）も含め、初回描画の前に向きを適用する
     OrientationHelper::applyOrientation(renderer, mappedInput, currentActivity.get());
+    // No previous screen/gesture to suppress here. setup() still needs to read
+    // the held Back button to decide whether to resume a book or boot to Home.
     currentActivity->onEnter();
   }
 }
