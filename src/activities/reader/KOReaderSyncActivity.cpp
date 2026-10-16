@@ -1,7 +1,6 @@
 #include "KOReaderSyncActivity.h"
 
 #include <GfxRenderer.h>
-#include <HalRTC.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <WiFi.h>
@@ -14,6 +13,7 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/TimeSync.h"
 
 namespace {
 CrossPointPosition makeLocalPositionWithParagraph(const int spineIndex, const int page, const int totalPages,
@@ -27,33 +27,18 @@ CrossPointPosition makeLocalPositionWithParagraph(const int spineIndex, const in
 }
 
 void syncTimeWithNTP() {
-  // Stop SNTP if already running (can't reconfigure while running)
-  if (esp_sntp_enabled()) {
-    esp_sntp_stop();
-  }
-
-  // Configure SNTP
-  esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-  esp_sntp_setservername(0, "pool.ntp.org");
-  esp_sntp_init();
+  TimeSync::start();
 
   // Wait for time to sync (with timeout)
   int retry = 0;
   const int maxRetries = 50;  // 5 seconds max
-  while (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED && retry < maxRetries) {
+  while (!TimeSync::hasSynced() && retry < maxRetries) {
     vTaskDelay(100 / portTICK_PERIOD_MS);
     retry++;
   }
 
-  if (retry < maxRetries) {
+  if (TimeSync::hasSynced()) {
     LOG_DBG("KOSync", "NTP time synced");
-    // DS3231 に UTC 時刻を書き込み
-    if (halRTC.isAvailable()) {
-      const time_t now = time(nullptr);
-      struct tm utc;
-      gmtime_r(&now, &utc);
-      halRTC.writeTime(utc);
-    }
   } else {
     LOG_DBG("KOSync", "NTP sync timeout, using fallback");
   }

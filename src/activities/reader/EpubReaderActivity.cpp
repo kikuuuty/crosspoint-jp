@@ -12,6 +12,8 @@
 #include <Logging.h>
 #include <esp_system.h>
 
+#include <cstring>
+
 #include "BookFileHelper.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -232,6 +234,13 @@ void EpubReaderActivity::loop() {
   auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   (void)fromTilt;
   if (!prevTriggered && !nextTriggered) {
+    // Schedule on the existing render task, never reset the inactivity timer.
+    // A full page render also restores antialiasing on panels without safe
+    // windowed updates. No page-turn action is performed here.
+    if (!RenderLock::peek() && readerClock.shouldRefresh(time(nullptr), SETTINGS.readerClockUpdate ==
+                                                                            CrossPointSettings::CLOCK_EVERY_MINUTE)) {
+      requestUpdate();
+    }
     return;
   }
 
@@ -502,6 +511,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           const int backupPercent = calculateBookPercent(section->currentPage, section->pageCount);
           section.reset();
           epub->clearCache();
+          progressSaved = false;
           epub->setupCacheDir();
           saveProgress(backupSpine, backupPage, backupPageCount, false, backupPercent);
         }
@@ -718,6 +728,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     saveProgress(currentSpineIndex, 0, 0, true, 100);
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_END_OF_BOOK), true, EpdFontFamily::BOLD);
+    readerClock.render(renderer);
     renderer.displayBuffer();
     automaticPageTurnActive = false;
     return;
@@ -729,7 +740,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
   renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
                                    &orientedMarginLeft);
-  orientedMarginTop += ds.screenMargin;
+  orientedMarginTop += std::max<int>(ds.screenMargin, GUI.getReaderHeaderHeight(renderer));
   orientedMarginLeft += ds.screenMargin;
   orientedMarginRight += ds.screenMargin;
 
@@ -973,20 +984,29 @@ int EpubReaderActivity::calculateBookPercent(int currentPage, int pageCount) con
 }
 
 void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount, bool isFinished, int percent) {
+  // Clock refreshes redraw the same page, but must not rewrite its progress.
+  uint8_t data[8];
+  data[0] = spineIndex & 0xFF;
+  data[1] = (spineIndex >> 8) & 0xFF;
+  data[2] = currentPage & 0xFF;
+  data[3] = (currentPage >> 8) & 0xFF;
+  data[4] = pageCount & 0xFF;
+  data[5] = (pageCount >> 8) & 0xFF;
+  data[6] = isFinished ? 1 : 0;
+  data[7] = (percent >= 0 && percent <= 100) ? static_cast<uint8_t>(percent) : ReadingProgress::PERCENT_UNKNOWN;
+  if (progressSaved && memcmp(data, lastSavedProgress, sizeof(data)) == 0) return;
+
   FsFile f;
   if (Storage.openFileForWrite("ERS", epub->getCachePath() + "/progress.bin", f)) {
     // 形式は docs/file-formats.md の progress.bin を参照。末尾の進捗率は後から追加したフィールドで、
     // 旧ファイル（7 バイト）は ReadingProgress::PERCENT_UNKNOWN 扱いになる
-    uint8_t data[8];
-    data[0] = currentSpineIndex & 0xFF;
-    data[1] = (currentSpineIndex >> 8) & 0xFF;
-    data[2] = currentPage & 0xFF;
-    data[3] = (currentPage >> 8) & 0xFF;
-    data[4] = pageCount & 0xFF;
-    data[5] = (pageCount >> 8) & 0xFF;
-    data[6] = isFinished ? 1 : 0;
-    data[7] = (percent >= 0 && percent <= 100) ? static_cast<uint8_t>(percent) : ReadingProgress::PERCENT_UNKNOWN;
-    f.write(data, sizeof(data));
+    if (f.write(data, sizeof(data)) != sizeof(data)) {
+      LOG_ERR("ERS", "Could not write progress!");
+      f.close();
+      return;
+    }
+    memcpy(lastSavedProgress, data, sizeof(data));
+    progressSaved = true;
     f.close();
     LOG_DBG("ERS", "Progress saved: Chapter %d, Page %d, Finished: %d, %d%%", spineIndex, currentPage, isFinished,
             percent);
@@ -1115,7 +1135,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   }
 }
 
-void EpubReaderActivity::renderStatusBar() const {
+void EpubReaderActivity::renderStatusBar() {
+  readerClock.render(renderer);
   // Calculate progress in book
   const int currentPage = section->currentPage + 1;
   const float pageCount = section->pageCount;

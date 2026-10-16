@@ -8,6 +8,7 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <cstring>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -85,6 +86,10 @@ void TxtReaderActivity::loop() {
 
   auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   if (!prevTriggered && !nextTriggered) {
+    if (!RenderLock::peek() && readerClock.shouldRefresh(time(nullptr), SETTINGS.readerClockUpdate ==
+                                                                            CrossPointSettings::CLOCK_EVERY_MINUTE)) {
+      requestUpdate();
+    }
     return;
   }
 
@@ -114,7 +119,7 @@ void TxtReaderActivity::initializeReader() {
   // Calculate viewport dimensions
   renderer.getOrientedViewableTRBL(&cachedOrientedMarginTop, &cachedOrientedMarginRight, &cachedOrientedMarginBottom,
                                    &cachedOrientedMarginLeft);
-  cachedOrientedMarginTop += cachedScreenMargin;
+  cachedOrientedMarginTop += std::max<int>(cachedScreenMargin, GUI.getReaderHeaderHeight(renderer));
   cachedOrientedMarginLeft += cachedScreenMargin;
   cachedOrientedMarginRight += cachedScreenMargin;
   cachedOrientedMarginBottom +=
@@ -329,6 +334,7 @@ void TxtReaderActivity::render(RenderLock&&) {
   if (pageOffsets.empty()) {
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_EMPTY_FILE), true, EpdFontFamily::BOLD);
+    readerClock.render(renderer);
     renderer.displayBuffer();
     return;
   }
@@ -416,7 +422,8 @@ void TxtReaderActivity::renderPage() {
   // scope destructor clears font cache via FontCacheManager
 }
 
-void TxtReaderActivity::renderStatusBar() const {
+void TxtReaderActivity::renderStatusBar() {
+  readerClock.render(renderer);
   const float progress = totalPages > 0 ? (currentPage + 1) * 100.0f / totalPages : 0;
   std::string title;
   if (SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE) {
@@ -425,22 +432,31 @@ void TxtReaderActivity::renderStatusBar() const {
   GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title);
 }
 
-void TxtReaderActivity::saveProgress() const {
+void TxtReaderActivity::saveProgress() {
+  uint8_t percent = ReadingProgress::PERCENT_UNKNOWN;
+  if (totalPages > 0) {
+    const int shown = std::min(currentPage + 1, totalPages);
+    percent = static_cast<uint8_t>((static_cast<uint32_t>(shown) * 100) / static_cast<uint32_t>(totalPages));
+  }
+  uint8_t data[5];
+  data[0] = currentPage & 0xFF;
+  data[1] = (currentPage >> 8) & 0xFF;
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = percent;
+  if (progressSaved && memcmp(data, lastSavedProgress, sizeof(data)) == 0) return;
+
   FsFile f;
   if (Storage.openFileForWrite("TRS", txt->getCachePath() + "/progress.bin", f)) {
     // 形式は docs/file-formats.md の progress.bin を参照。末尾の進捗率はホーム画面の表示用
-    uint8_t percent = ReadingProgress::PERCENT_UNKNOWN;
-    if (totalPages > 0) {
-      const int shown = std::min(currentPage + 1, totalPages);
-      percent = static_cast<uint8_t>((static_cast<uint32_t>(shown) * 100) / static_cast<uint32_t>(totalPages));
+    if (f.write(data, sizeof(data)) != sizeof(data)) {
+      LOG_ERR("TRS", "Could not write progress!");
+      f.close();
+      return;
     }
-    uint8_t data[5];
-    data[0] = currentPage & 0xFF;
-    data[1] = (currentPage >> 8) & 0xFF;
-    data[2] = 0;
-    data[3] = 0;
-    data[4] = percent;
-    f.write(data, sizeof(data));
+    memcpy(lastSavedProgress, data, sizeof(data));
+    progressSaved = true;
+    f.close();
   }
 }
 

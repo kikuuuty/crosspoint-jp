@@ -38,6 +38,10 @@ struct ButtonHintInsets {
 struct ThemeMetrics {
   int batteryWidth;
   int batteryHeight;
+  int batteryIconYOffset;
+  int headerStatusFontId;
+  int headerStatusTopPadding;
+  int headerStatusRightPadding;
 
   int topPadding;
   int batteryBarHeight;
@@ -82,6 +86,22 @@ struct ThemeMetrics {
   int keyboardTextFieldWidthPercent;
   int keyboardWidthPercent;
   int keyboardKeyCornerRadius;
+};
+
+enum class HeaderStatusContext { Ui, Reader };
+
+// Clock and battery share typography and edge padding, not Home's button-hint
+// reservation. Readers have no hint band, regardless of reading orientation.
+struct HeaderStatusLayout {
+  Rect bounds;
+  Rect battery;
+  int fontId;
+  int textY;
+  int clockX;
+
+  static HeaderStatusLayout calculate(const ThemeMetrics& metrics, HeaderStatusContext context, Rect uiContentArea,
+                                      int screenWidth, int viewableTop, int viewableRight, int textHeight,
+                                      int lineHeight, int clockWidth);
 };
 
 enum UIIcon {
@@ -129,6 +149,10 @@ class BaseTheme {
                         const std::function<bool(int index)>& rowDimmed = nullptr) const = 0;
   virtual void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title,
                           const char* subtitle = nullptr) const = 0;
+  HeaderStatusLayout getHeaderStatusLayout(const GfxRenderer& renderer, HeaderStatusContext context,
+                                           const char* clockText = nullptr) const;
+  int getReaderHeaderHeight(const GfxRenderer& renderer) const;
+  void drawReaderHeader(const GfxRenderer& renderer, const char* clockText) const;
   virtual void drawSubHeader(const GfxRenderer& renderer, Rect rect, const char* label,
                              const char* rightLabel = nullptr) const = 0;
   virtual void drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,

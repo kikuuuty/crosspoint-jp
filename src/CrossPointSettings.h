@@ -218,7 +218,7 @@ class CrossPointSettings {
   uint8_t statusBarProgressBar = HIDE_PROGRESS;
   uint8_t statusBarProgressBarThickness = PROGRESS_BAR_NORMAL;
   uint8_t statusBarTitle = 0;
-  uint8_t statusBarBattery = 0;
+  uint8_t statusBarBattery = 0;  // Legacy migration only; the reader battery is always in the header.
   // Direction-specific reader settings
   DirectionSettings horizontal;
   DirectionSettings vertical = {0, "", 1, 185, 15, 0, 0, 0, 10, 1, 0, 1};  // charSpacing=15 for vertical, rubyEnabled=1
@@ -238,6 +238,8 @@ class CrossPointSettings {
   uint8_t frontButtonRight = FRONT_HW_RIGHT;
   // Reader writing mode setting
   uint8_t writingMode = WM_AUTO;
+  enum READER_CLOCK_UPDATE { CLOCK_ON_PAGE_TURN = 0, CLOCK_EVERY_MINUTE = 1, READER_CLOCK_UPDATE_COUNT };
+  uint8_t readerClockUpdate = CLOCK_ON_PAGE_TURN;
   // Auto-sleep timeout setting (default 10 minutes)
   uint8_t sleepTimeout = SLEEP_10_MIN;
   // E-ink refresh frequency (default 15 pages)

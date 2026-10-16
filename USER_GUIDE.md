@@ -140,10 +140,13 @@ The Settings screen allows you to configure the device's behavior. There are a f
   - "Full w/ Book Bar" - Show status bar with book progress (as bar)
   - "Book Bar Only" - Show book progress (as bar)
   - "Full w/ Chapter Bar" - Show status bar with chapter progress (as bar)
-- **Hide Battery %**: Configure where to suppress the battery percentage display in the status bar; the battery icon will still be shown:
+- **Hide Battery %**: Configure where to suppress the battery percentage display; the battery icon will still be shown. In the EPUB/TXT reader, the battery is at the top right, not in the bottom status bar:
   - "Never" (default) - Always show battery percentage
   - "In Reader" - Show battery percentage everywhere except in reading mode
   - "Always" - Always hide battery percentage
+- **Clock Update** (Settings -> Reader): The EPUB/TXT reader shows the current time as `HH:MM` at the top center (`--:--` if time is not set).
+  - "On Page Turn" (default) - Update when a page is displayed, without periodic refreshes.
+  - "Every Minute" - Also refresh the current page when the minute changes. This preserves reading position but causes additional screen refreshes; it does not prevent auto-sleep.
 - **Refresh Frequency**: Set how often the screen does a full refresh while reading to reduce ghosting; options are every 1, 5, 10, 15, or 30 pages.
 
 - **UI Theme**: Set which UI theme to use:
