@@ -11,13 +11,9 @@
 #include "fontIds.h"
 
 namespace {
-constexpr int MENU_ITEMS = 6;
-const StrId menuNames[MENU_ITEMS] = {StrId::STR_CHAPTER_PAGE_COUNT,
-                                     StrId::STR_BOOK_PROGRESS_PERCENTAGE,
-                                     StrId::STR_PROGRESS_BAR,
-                                     StrId::STR_PROGRESS_BAR_THICKNESS,
-                                     StrId::STR_TITLE,
-                                     StrId::STR_BATTERY};
+constexpr int MENU_ITEMS = 5;
+const StrId menuNames[MENU_ITEMS] = {StrId::STR_CHAPTER_PAGE_COUNT, StrId::STR_BOOK_PROGRESS_PERCENTAGE,
+                                     StrId::STR_PROGRESS_BAR, StrId::STR_PROGRESS_BAR_THICKNESS, StrId::STR_TITLE};
 constexpr int PROGRESS_BAR_ITEMS = 3;
 const StrId progressBarNames[PROGRESS_BAR_ITEMS] = {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE};
 
@@ -107,9 +103,6 @@ void StatusBarSettingsActivity::handleSelection() {
   } else if (selectedIndex == 4) {
     // Chapter Title
     SETTINGS.statusBarTitle = (SETTINGS.statusBarTitle + 1) % TITLE_ITEMS;
-  } else if (selectedIndex == 5) {
-    // Show Battery
-    SETTINGS.statusBarBattery = (SETTINGS.statusBarBattery + 1) % 2;
   }
   SETTINGS.saveToFile();
 }
@@ -149,8 +142,6 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
           return I18N.get(progressBarThicknessNames[SETTINGS.statusBarProgressBarThickness]);
         } else if (index == 4) {
           return I18N.get(titleNames[SETTINGS.statusBarTitle]);
-        } else if (index == 5) {
-          return SETTINGS.statusBarBattery ? tr(STR_SHOW) : tr(STR_HIDE);
         } else {
           return tr(STR_HIDE);
         }

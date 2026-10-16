@@ -1,11 +1,9 @@
 #include "WifiSelectionActivity.h"
 
 #include <GfxRenderer.h>
-#include <HalRTC.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <WiFi.h>
-#include <esp_sntp.h>
 
 #include <algorithm>
 #include <map>
@@ -15,6 +13,7 @@
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/TimeSync.h"
 
 void WifiSelectionActivity::onEnter() {
   Activity::onEnter();
@@ -244,29 +243,16 @@ void WifiSelectionActivity::checkConnectionStatus() {
   const wl_status_t status = WiFi.status();
 
   if (status == WL_CONNECTED) {
-    // タイムゾーン設定（JST = UTC+9）+ NTP時刻同期（WiFi接続時は常に実行）
-    setenv("TZ", "JST-9", 1);
-    tzset();
-    if (esp_sntp_enabled()) {
-      esp_sntp_stop();
-    }
-    esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-    esp_sntp_setservername(0, "pool.ntp.org");
-    esp_sntp_init();
-    for (int retry = 0; retry < 30 && sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED; retry++) {
+    // Completion is latched by a persistent callback. Unlike sntp_get_sync_status(),
+    // reading this result does not consume it. Late replies also schedule RTC saving.
+    TimeSync::start();
+    for (int retry = 0; retry < 30 && !TimeSync::hasSynced(); retry++) {
       vTaskDelay(100 / portTICK_PERIOD_MS);
     }
-    if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+    if (TimeSync::hasSynced()) {
       LOG_DBG("WIFI", "NTP time synced (JST)");
-      // DS3231 に UTC 時刻を書き込み
-      if (halRTC.isAvailable()) {
-        const time_t now = time(nullptr);
-        struct tm utc;
-        gmtime_r(&now, &utc);
-        halRTC.writeTime(utc);
-      }
     } else {
-      LOG_DBG("WIFI", "NTP sync timeout");
+      LOG_DBG("WIFI", "NTP still pending; continuing in background");
     }
 
     // Successfully connected

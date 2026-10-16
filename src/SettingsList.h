@@ -177,6 +177,9 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                         "uiOrientation", StrId::STR_CAT_DISPLAY),
 
       // --- Reader ---
+      SettingInfo::Enum(StrId::STR_READER_CLOCK_UPDATE, &CrossPointSettings::readerClockUpdate,
+                        {StrId::STR_CLOCK_ON_PAGE_TURN, StrId::STR_CLOCK_EVERY_MINUTE}, "readerClockUpdate",
+                        StrId::STR_CAT_READER),
       SettingInfo::Toggle(StrId::STR_EMBEDDED_STYLE, &CrossPointSettings::embeddedStyle, "embeddedStyle",
                           StrId::STR_CAT_READER),
       SettingInfo::Enum(StrId::STR_ORIENTATION, &CrossPointSettings::orientation,
@@ -271,8 +274,6 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
       SettingInfo::Enum(StrId::STR_TITLE, &CrossPointSettings::statusBarTitle,
                         {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE}, "statusBarTitle",
                         StrId::STR_CUSTOMISE_STATUS_BAR),
-      SettingInfo::Toggle(StrId::STR_BATTERY, &CrossPointSettings::statusBarBattery, "statusBarBattery",
-                          StrId::STR_CUSTOMISE_STATUS_BAR),
   };
   // X3 only — show tilt page turn setting when the QMI8658 IMU is present.
   if (halTiltSensor.isAvailable()) {

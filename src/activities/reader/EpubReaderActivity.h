@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "EpubReaderMenuActivity.h"
+#include "ReaderClock.h"
 #include "activities/Activity.h"
 
 class EpubReaderActivity final : public Activity {
@@ -19,6 +20,9 @@ class EpubReaderActivity final : public Activity {
   // Cleared on the next render after the new section loads and resolves it to a page.
   std::string pendingAnchor;
   int pagesUntilFullRefresh = 0;
+  ReaderClock readerClock;
+  uint8_t lastSavedProgress[8] = {};
+  bool progressSaved = false;
   int cachedSpineIndex = 0;
   int cachedChapterTotalPageCount = 0;
   unsigned long lastPageTurnTime = 0UL;
@@ -44,7 +48,7 @@ class EpubReaderActivity final : public Activity {
 
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
-  void renderStatusBar() const;
+  void renderStatusBar();
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
   // percent: 本全体の進捗率（0〜100）。不明なら -1（ホーム画面が book.bin を開かずに表示できるよう
   // progress.bin の末尾に 1 バイトで保存する）

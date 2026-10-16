@@ -39,6 +39,7 @@
 #endif
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/TimeSync.h"
 #include "util/ButtonNavigator.h"
 #include "util/ScreenshotUtil.h"
 
@@ -243,6 +244,7 @@ static void appendPowerLog(const char* event) {
 
 // Enter deep sleep mode
 void enterDeepSleep() {
+  TimeSync::prepareForSleep();
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
   APP_STATE.saveToFile();
@@ -468,35 +470,42 @@ void setup() {
 
   APP_STATE.loadFromFile();
 
-  // 時刻復元の優先順位:
-  // 1. DS3231 外部RTC（X3のみ、USB給電中は動作するがバッテリースリープでは電源断）
-  // 2. ESP-IDF内部復元（CONFIG_NEWLIB_TIME_SYSCALL_USE_RTC_HRT、USB給電時のみ有効）
-  // 時刻が不明な場合はエポック付近のまま残し、isTimeValid()がfalseを返すようにする。
+  // Keep valid ESP-IDF time across sleep/reset. An external RTC may be stale
+  // (e.g. from an older firmware that skipped saving a successful NTP sync).
+  // Use DS3231 only when the internal clock has not retained a valid date.
   {
     const time_t bootTime = time(nullptr);
-    struct tm rtcTm;
+    time_t rtcTime = 0;
+    struct tm rtcTm = {};
     if (halRTC.readTime(rtcTm)) {
       // DS3231 から UTC 時刻を復元
       // timegm() が利用できないため、TZを一時的にUTCに変更してmktime()を使用
       setenv("TZ", "UTC0", 1);
       tzset();
-      const time_t rtcTime = mktime(&rtcTm);
+      rtcTime = mktime(&rtcTm);
       setenv("TZ", "JST-9", 1);
       tzset();
-      if (rtcTime >= 1704067200) {
+    }
+    switch (TimeSync::selectClockSource(bootTime, rtcTime)) {
+      case TimeSync::ClockSource::Internal:
+        g_timeRestoreSource = 3;
+        LOG_INF("MAIN", "Keeping ESP-IDF time: %lld (RTC=%lld)", (long long)bootTime, (long long)rtcTime);
+        break;
+      case TimeSync::ClockSource::Rtc: {
         struct timeval tv = {.tv_sec = rtcTime, .tv_usec = 0};
-        settimeofday(&tv, nullptr);
-        g_timeRestoreSource = 1;
-        LOG_DBG("MAIN", "Restored time from DS3231: %ld (boot=%ld)", (long)rtcTime, (long)bootTime);
-      } else {
-        LOG_DBG("MAIN", "DS3231 time too old: %ld", (long)rtcTime);
+        if (settimeofday(&tv, nullptr) == 0) {
+          g_timeRestoreSource = 1;
+          LOG_INF("MAIN", "Restored time from DS3231: %lld (boot=%lld)", (long long)rtcTime, (long long)bootTime);
+        } else {
+          g_timeRestoreSource = 5;
+          LOG_ERR("MAIN", "Could not restore time from DS3231");
+        }
+        break;
       }
-    } else if (bootTime >= 1704067200) {
-      g_timeRestoreSource = 3;
-      LOG_DBG("MAIN", "Using ESP-IDF restored time: %ld", (long)bootTime);
-    } else {
-      g_timeRestoreSource = 5;
-      LOG_DBG("MAIN", "No valid time source available");
+      case TimeSync::ClockSource::None:
+        g_timeRestoreSource = 5;
+        LOG_DBG("MAIN", "No valid time source available");
+        break;
     }
   }
 
@@ -631,6 +640,8 @@ void loop() {
   if (gpio.wasUsbStateChanged()) {
     activityManager.requestUpdate();
   }
+
+  TimeSync::process();
 
   const unsigned long activityStartTime = millis();
   activityManager.loop();

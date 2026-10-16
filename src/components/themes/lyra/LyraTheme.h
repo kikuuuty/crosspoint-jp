@@ -1,6 +1,7 @@
 #pragma once
 
 #include "components/themes/BaseTheme.h"
+#include "fontIds.h"
 
 class GfxRenderer;
 
@@ -8,6 +9,10 @@ class GfxRenderer;
 namespace LyraMetrics {
 constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .batteryHeight = 12,
+                                 .batteryIconYOffset = 6,
+                                 .headerStatusFontId = SMALL_FONT_ID,
+                                 .headerStatusTopPadding = 5,
+                                 .headerStatusRightPadding = 12,
                                  .topPadding = 5,
                                  .batteryBarHeight = 40,
                                  .headerHeight = 84,

@@ -140,31 +140,36 @@ const uint8_t* LyraTheme::iconForName(UIIcon icon, int size) {
 void LyraTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const bool showPercentage) const {
   // Left aligned: icon on left, percentage on right (reader mode)
   const uint16_t percentage = powerManager.getBatteryPercentage();
+  const auto& metrics = UITheme::getInstance().getMetrics();
 
   if (showPercentage) {
     const auto percentageText = std::to_string(percentage) + "%";
-    renderer.drawText(SMALL_FONT_ID, rect.x + batteryPercentSpacing + LyraMetrics::values.batteryWidth, rect.y,
+    renderer.drawText(metrics.headerStatusFontId, rect.x + batteryPercentSpacing + metrics.batteryWidth, rect.y,
                       percentageText.c_str());
   }
 
-  drawLyraBatteryIcon(renderer, rect.x, rect.y + 6, LyraMetrics::values.batteryWidth, rect.height, percentage);
+  drawLyraBatteryIcon(renderer, rect.x, rect.y + metrics.batteryIconYOffset, metrics.batteryWidth, rect.height,
+                      percentage);
 }
 
 void LyraTheme::drawBatteryRight(const GfxRenderer& renderer, Rect rect, const bool showPercentage) const {
   // Right aligned: percentage on left, icon on right (UI headers)
   const uint16_t percentage = powerManager.getBatteryPercentage();
+  const auto& metrics = UITheme::getInstance().getMetrics();
 
   if (showPercentage) {
     const auto percentageText = std::to_string(percentage) + "%";
-    const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, percentageText.c_str());
+    const int textWidth = renderer.getTextWidth(metrics.headerStatusFontId, percentageText.c_str());
     // Clear the area where we're going to draw the text to prevent ghosting
-    const auto textHeight = renderer.getTextHeight(SMALL_FONT_ID);
+    const auto textHeight = renderer.getTextHeight(metrics.headerStatusFontId);
     renderer.fillRect(rect.x - textWidth - batteryPercentSpacing, rect.y, textWidth, textHeight, false);
     // Draw text to the left of the icon
-    renderer.drawText(SMALL_FONT_ID, rect.x - textWidth - batteryPercentSpacing, rect.y, percentageText.c_str());
+    renderer.drawText(metrics.headerStatusFontId, rect.x - textWidth - batteryPercentSpacing, rect.y,
+                      percentageText.c_str());
   }
 
-  drawLyraBatteryIcon(renderer, rect.x, rect.y + 6, LyraMetrics::values.batteryWidth, rect.height, percentage);
+  drawLyraBatteryIcon(renderer, rect.x, rect.y + metrics.batteryIconYOffset, metrics.batteryWidth, rect.height,
+                      percentage);
 }
 
 void LyraTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle) const {
@@ -172,14 +177,10 @@ void LyraTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
 
   const bool showBatteryPercentage =
       SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS;
-  // Position icon at right edge, drawBatteryRight will place text to the left
-  const int batteryX = rect.x + rect.width - 12 - LyraMetrics::values.batteryWidth;
-  const int batteryY = (renderer.getOrientation() == GfxRenderer::Orientation::PortraitInverted)
-                           ? renderer.getScreenHeight() - LyraMetrics::values.batteryHeight - 35
-                           : rect.y + 5;
-  drawBatteryRight(renderer,
-                   Rect{batteryX, batteryY, LyraMetrics::values.batteryWidth, LyraMetrics::values.batteryHeight},
-                   showBatteryPercentage);
+  // Share the reader's typography/padding, but avoid the button hints only on
+  // UI screens. The title/subtitle keep their existing layout.
+  const auto statusLayout = getHeaderStatusLayout(renderer, HeaderStatusContext::Ui);
+  drawBatteryRight(renderer, statusLayout.battery, showBatteryPercentage);
 
   const int usableWidth = rect.width - LyraMetrics::values.contentSidePadding * 2;
   constexpr int titleSubtitleGap = 10;

@@ -110,6 +110,33 @@ void BaseTheme::drawThinProgressBar(const GfxRenderer& renderer, Rect rect, int 
   }
 }
 
+HeaderStatusLayout BaseTheme::getHeaderStatusLayout(const GfxRenderer& renderer, HeaderStatusContext context,
+                                                    const char* clockText) const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  int top, right, bottom, left;
+  renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
+  return HeaderStatusLayout::calculate(metrics, context, UITheme::getContentArea(renderer), renderer.getScreenWidth(),
+                                       top, right, renderer.getTextHeight(metrics.headerStatusFontId),
+                                       renderer.getLineHeight(metrics.headerStatusFontId),
+                                       clockText ? renderer.getTextWidth(metrics.headerStatusFontId, clockText) : 0);
+}
+
+int BaseTheme::getReaderHeaderHeight(const GfxRenderer& renderer) const {
+  const auto layout = getHeaderStatusLayout(renderer, HeaderStatusContext::Reader);
+  int top, right, bottom, left;
+  renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
+  // Readers already add the oriented top bezel margin to this value.
+  return layout.bounds.y + layout.bounds.height - top;
+}
+
+void BaseTheme::drawReaderHeader(const GfxRenderer& renderer, const char* clockText) const {
+  const auto layout = getHeaderStatusLayout(renderer, HeaderStatusContext::Reader, clockText);
+  renderer.fillRect(layout.bounds.x, layout.bounds.y, layout.bounds.width, layout.bounds.height, false);
+  renderer.drawText(layout.fontId, layout.clockX, layout.textY, clockText);
+  drawBatteryRight(renderer, layout.battery,
+                   SETTINGS.hideBatteryPercentage == CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER);
+}
+
 void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage,
                               const int pageCount, std::string title, const int paddingBottom, const int textYOffset,
                               const bool rtlProgress) const {
@@ -121,24 +148,15 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   // Draw Progress Text
   const auto screenHeight = renderer.getScreenHeight();
   auto textY = screenHeight - UITheme::getInstance().getStatusBarHeight() - orientedMarginBottom - paddingBottom - 4;
-  const bool showBatteryPercentage =
-      SETTINGS.hideBatteryPercentage == CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
-  // Reserve space for 100% so the chapter counter stays fixed as the battery level changes.
-  const int batterySize =
-      SETTINGS.statusBarBattery
-          ? metrics.batteryWidth + (showBatteryPercentage ? renderer.getTextWidth(SMALL_FONT_ID, "100%") + 5 : 4)
-          : 0;
-  int leftContentWidth = batterySize;
+  int leftContentWidth = 0;
   int progressTextWidth = 0;
 
   if (SETTINGS.statusBarChapterPageCount) {
-    // Left align the chapter counter after the battery, or at the left edge when hidden.
+    // The battery lives in the reader header; the chapter counter starts at the left edge.
     char pageStr[32];
     snprintf(pageStr, sizeof(pageStr), "%d/%d", currentPage, pageCount);
-    const int pageXOffset = batterySize > 0 ? batterySize + 10 : 0;
-    renderer.drawText(SMALL_FONT_ID, metrics.statusBarHorizontalMargin + orientedMarginLeft + pageXOffset, textY,
-                      pageStr);
-    leftContentWidth = pageXOffset + renderer.getTextWidth(SMALL_FONT_ID, pageStr);
+    renderer.drawText(SMALL_FONT_ID, metrics.statusBarHorizontalMargin + orientedMarginLeft, textY, pageStr);
+    leftContentWidth = renderer.getTextWidth(SMALL_FONT_ID, pageStr);
   }
 
   if (SETTINGS.statusBarBookProgressPercentage) {
@@ -174,14 +192,6 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
       renderer.fillRect(orientedMarginLeft, progressBarY, barWidth, ((SETTINGS.statusBarProgressBarThickness + 1) * 2),
                         true);
     }
-  }
-
-  // Draw Battery
-  if (SETTINGS.statusBarBattery) {
-    GUI.drawBatteryLeft(renderer,
-                        Rect{metrics.statusBarHorizontalMargin + orientedMarginLeft + 1, textY, metrics.batteryWidth,
-                             metrics.batteryHeight},
-                        showBatteryPercentage);
   }
 
   // Draw Title
