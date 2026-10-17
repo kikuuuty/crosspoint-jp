@@ -344,9 +344,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->listDepth++;
   }
 
-  // Extract class, style, and id attributes
+  // Extract class, style, id, and hidden attributes
   std::string classAttr;
   std::string styleAttr;
+  std::string idAttr;
+  bool hasHiddenAttr = false;
   if (atts != nullptr) {
     for (int i = 0; atts[i]; i += 2) {
       if (strcmp(atts[i], "class") == 0) {
@@ -354,8 +356,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       } else if (strcmp(atts[i], "style") == 0) {
         styleAttr = atts[i + 1];
       } else if (strcmp(atts[i], "id") == 0) {
-        // Defer recording until startNewTextBlock, after previous block is flushed to pages
-        self->pendingAnchorId = atts[i + 1];
+        idAttr = atts[i + 1];
+      } else if (strcmp(atts[i], "hidden") == 0) {
+        hasHiddenAttr = true;
       }
     }
   }
@@ -375,12 +378,23 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
   }
 
-  // Skip elements with display:none before all fast paths (tables, links, etc.).
+  // HTML hidden is a presence attribute, independent of CSS availability or value.
+  // Match upstream behavior: it overrides even an explicit CSS display:block.
+  if (hasHiddenAttr) {
+    cssStyle.display = CssDisplay::None;
+    cssStyle.defined.display = 1;
+  }
+
+  // Skip hidden/display:none elements before all fast paths (tables, links, etc.).
   if (cssStyle.hasDisplay() && cssStyle.display == CssDisplay::None) {
     self->skipUntilDepth = self->depth;
     self->depth += 1;
     return;
   }
+
+  // Defer recording until startNewTextBlock, after previous text is flushed.
+  // Hidden elements must not overwrite an earlier visible pending anchor.
+  if (!idAttr.empty()) self->pendingAnchorId = std::move(idAttr);
 
   // Special handling for tables: buffer cell data for grid rendering.
   if (strcmp(name, "table") == 0) {
@@ -1167,6 +1181,11 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
   if (self->rubyLimitExceeded) return;
 
+  // Hidden content must not reach the table-cell fast path either.
+  if (self->skipUntilDepth < self->depth) {
+    return;
+  }
+
   // Skip content of nested table
   if (self->tableDepth > 1) {
     return;
@@ -1182,11 +1201,6 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       }
       self->tableCellTextBuffer += c;
     }
-    return;
-  }
-
-  // Middle of skip
-  if (self->skipUntilDepth < self->depth) {
     return;
   }
 
@@ -1459,6 +1473,7 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  const bool skippedElement = self->skipUntilDepth < self->depth;
 
   // Check if any style state will change after we decrement depth
   // If so, we MUST flush the partWordBuffer with the CURRENT style first
@@ -1482,13 +1497,14 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     if (self->listDepth > 0) self->listDepth--;
   }
 
-  if (self->tableDepth > 1 && strcmp(name, "table") == 0) {
+  // A skipped table/row/cell did not open a corresponding table state.
+  if (!skippedElement && self->tableDepth > 1 && strcmp(name, "table") == 0) {
     self->tableDepth -= 1;
     LOG_DBG("EHP", "nested table detected, skipped");
     return;
   }
 
-  if (self->tableDepth == 1 && (strcmp(name, "td") == 0 || strcmp(name, "th") == 0)) {
+  if (!skippedElement && self->tableDepth == 1 && (strcmp(name, "td") == 0 || strcmp(name, "th") == 0)) {
     if (!self->tableBuffer.empty()) {
       ChapterHtmlSlimParser::TableCellData cell;
       if (!self->tableCellTextBuffer.empty() && self->tableCellTextBuffer.back() == ' ') {
@@ -1501,11 +1517,11 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     self->tableCellTextBuffer.clear();
   }
 
-  if (self->tableDepth == 1 && strcmp(name, "tr") == 0) {
+  if (!skippedElement && self->tableDepth == 1 && strcmp(name, "tr") == 0) {
     // Row complete
   }
 
-  if (self->tableDepth == 1 && strcmp(name, "table") == 0) {
+  if (!skippedElement && self->tableDepth == 1 && strcmp(name, "table") == 0) {
     self->tableDepth -= 1;
     self->flushTableAsGrid();
     self->tableBuffer.clear();
@@ -1647,7 +1663,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   }
 
   // Clear block style when leaving header or block elements
-  if (headerOrBlockTag) {
+  if (headerOrBlockTag && !skippedElement) {
     self->currentCssStyle.reset();
     self->updateEffectiveInlineStyle();
 
