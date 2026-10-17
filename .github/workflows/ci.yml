@@ -155,6 +155,16 @@ jobs:
           node-version: '24'
       - run: python test/run_web_transfer_test.py
 
+  font-decompressor-test:
+    name: Font Decompressor OOM Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - run: python test/run_font_decompressor_test.py
+
   # This job is used as the PR required actions check, allows for changes to other steps in the future without breaking
   # PR requirements.
   test-status:
@@ -167,6 +177,7 @@ jobs:
       - zip-file-test
       - progress-file-test
       - web-transfer-test
+      - font-decompressor-test
     if: always()
     runs-on: ubuntu-latest
     steps:
