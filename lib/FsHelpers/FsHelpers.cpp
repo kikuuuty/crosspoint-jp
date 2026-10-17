@@ -2,44 +2,36 @@
 
 #include <cctype>
 #include <cstring>
-#include <vector>
 
 namespace FsHelpers {
 
 std::string normalisePath(const std::string& path) {
-  std::vector<std::string> components;
-  std::string component;
-
-  for (const auto c : path) {
-    if (c == '/') {
-      if (!component.empty()) {
-        if (component == "..") {
-          if (!components.empty()) {
-            components.pop_back();
-          }
-        } else {
-          components.push_back(component);
-        }
-        component.clear();
-      }
-    } else {
-      component += c;
-    }
-  }
-
-  if (!component.empty()) {
-    components.push_back(component);
-  }
-
+  // Keep the existing relative-result contract, but process the final component
+  // exactly like every other one (including trailing "." and ".."). Only the
+  // returned string owns storage; components are views, not heap allocations.
+  const std::string_view input(path);
   std::string result;
-  for (const auto& c : components) {
-    if (!result.empty()) {
-      result += "/";
+  result.reserve(path.size());
+  for (size_t start = 0; start < path.size();) {
+    const size_t end = path.find('/', start);
+    const size_t length = (end == std::string::npos ? path.size() : end) - start;
+    const std::string_view component = input.substr(start, length);
+    if (component == "..") {
+      const size_t slash = result.find_last_of('/');
+      result.resize(slash == std::string::npos ? 0 : slash);
+    } else if (!component.empty() && component != ".") {
+      if (!result.empty()) result += '/';
+      result.append(component.data(), component.size());
     }
-    result += c;
+    if (end == std::string::npos) break;
+    start = end + 1;
   }
-
   return result;
+}
+
+bool isSafePathComponent(std::string_view name) {
+  return !name.empty() && name != "." && name != ".." && name.find_first_of("/\\") == std::string_view::npos &&
+         name.find('\0') == std::string_view::npos;
 }
 
 bool checkFileExtension(std::string_view fileName, const char* extension) {

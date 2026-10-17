@@ -8,6 +8,13 @@ namespace FsHelpers {
 
 std::string normalisePath(const std::string& path);
 
+// A single filename/folder name, not a path. Repeated dots inside a name are
+// valid; exact dot components, separators and embedded NULs are not.
+bool isSafePathComponent(std::string_view name);
+inline bool isSafePathComponent(const String& name) {
+  return isSafePathComponent(std::string_view{name.c_str(), name.length()});
+}
+
 /**
  * Check if the given filename ends with the specified extension (case-insensitive).
  */

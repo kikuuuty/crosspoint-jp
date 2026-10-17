@@ -1768,7 +1768,8 @@
 
 <script>
   // get current path from query parameter
-  const currentPath = decodeURIComponent(new URLSearchParams(window.location.search).get('path') || '/');
+  // URLSearchParams already decodes once; a second decode corrupts literal '%' names.
+  const currentPath = new URLSearchParams(window.location.search).get('path') || '/';
 
   if (currentPath !== '/') {
     const leaf = currentPath.split('/').filter(Boolean).pop();
@@ -1950,7 +1951,7 @@
           fileTableContent += `<td><span class="file-icon">📁</span><a href="/files?path=${encodeURIComponent(folderPath)}" class="folder-link">${escapeHtml(file.name)}</a><span class="folder-badge">FOLDER</span></td>`;
           fileTableContent += '<td>Folder</td>';
           fileTableContent += '<td>-</td>';
-          fileTableContent += `<td class="actions-col"><div class="action-icon-group"><button class="delete-btn" onclick="openDeleteModal('${file.name.replaceAll("'", "\\'")}', '${folderPath.replaceAll("'", "\\'")}', true)" title="Delete folder">🗑️</button></div></td>`;
+          fileTableContent += `<td class="actions-col"><div class="action-icon-group"><button class="delete-btn" data-action="delete" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(folderPath)}" data-folder="true" title="Delete folder">🗑️</button></div></td>`;
           fileTableContent += '</tr>';
         } else {
           let filePath = currentPath;
@@ -1964,12 +1965,12 @@
           fileTableContent += `<a rel="noopener noreferrer" target="_blank" href="/download?path=${encodeURIComponent(filePath)}" class="file-link">${escapeHtml(file.name)}</a>`;
           if (file.isEpub) fileTableContent += '<span class="epub-badge">EPUB</span>';
           fileTableContent += '</td>';
-          fileTableContent += `<td>${file.name.split('.').pop().toUpperCase()}</td>`;
+          fileTableContent += `<td>${escapeHtml(file.name.split('.').pop().toUpperCase())}</td>`;
           fileTableContent += `<td>${formatFileSize(file.size)}</td>`;
           fileTableContent += `<td class="actions-col"><div class="action-icon-group">`;
-          fileTableContent += `<button class="move-btn" onclick="openMoveModal('${file.name.replaceAll("'", "\\'")}', '${filePath.replaceAll("'", "\\'")}' )" title="Move file">📂</button>`;
-          fileTableContent += `<button class="rename-btn" onclick="openRenameModal('${file.name.replaceAll("'", "\\'")}', '${filePath.replaceAll("'", "\\'")}' )" title="Rename file">✏️</button>`;
-          fileTableContent += `<button class="delete-btn" onclick="openDeleteModal('${file.name.replaceAll("'", "\\'")}', '${filePath.replaceAll("'", "\\'")}', false)" title="Delete file">🗑️</button>`;
+          fileTableContent += `<button class="move-btn" data-action="move" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(filePath)}" title="Move file">📂</button>`;
+          fileTableContent += `<button class="rename-btn" data-action="rename" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(filePath)}" title="Rename file">✏️</button>`;
+          fileTableContent += `<button class="delete-btn" data-action="delete" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(filePath)}" data-folder="false" title="Delete file">🗑️</button>`;
           fileTableContent += `</div></td>`;
           fileTableContent += '</tr>';
         }
@@ -2791,6 +2792,22 @@
 
   // Initialize quality settings handlers
   document.addEventListener('DOMContentLoaded', function() {
+    // Keep names/paths as escaped HTML data, never executable onclick strings.
+    // Delegation also survives hydrate() replacing the file table's contents.
+    document.getElementById('file-table').addEventListener('click', function(e) {
+      const button = e.target.closest('button[data-action]');
+      if (!button) return;
+      const name = button.dataset.name;
+      const path = button.dataset.path;
+      if (button.dataset.action === 'move') {
+        openMoveModal(name, path);
+      } else if (button.dataset.action === 'rename') {
+        openRenameModal(name, path);
+      } else if (button.dataset.action === 'delete') {
+        openDeleteModal(name, path, button.dataset.folder === 'true');
+      }
+    });
+
     const qualitySlider = document.getElementById('qualitySlider');
     const qualityInput = document.getElementById('qualityInput');
 

@@ -142,6 +142,19 @@ jobs:
           python-version: '3.14'
       - run: python test/run_progress_file_test.py
 
+  web-transfer-test:
+    name: Web Transfer Safety Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: python test/run_web_transfer_test.py
+
   # This job is used as the PR required actions check, allows for changes to other steps in the future without breaking
   # PR requirements.
   test-status:
@@ -153,6 +166,7 @@ jobs:
       - ota-channel-test
       - zip-file-test
       - progress-file-test
+      - web-transfer-test
     if: always()
     runs-on: ubuntu-latest
     steps:
