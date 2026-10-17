@@ -2,8 +2,6 @@
 
 #include <InflateReader.h>
 
-#include <vector>
-
 #include "EpdFontData.h"
 
 class FontDecompressor {
@@ -67,13 +65,22 @@ class FontDecompressor {
 
   // Hot group: last decompressed group (byte-aligned) for non-prewarmed fallback path.
   // Kept in byte-aligned format; individual glyphs are compacted on demand into hotGlyphBuf.
+  // Use checked malloc buffers instead of vector::resize(): with -fno-exceptions,
+  // vector allocation failure aborts before the caller can handle it (#2526).
+  // Groups can be tens of KB, so stack allocation is not an option. Reuse capacity
+  // until clearCache()/deinit(), which release both owned buffers.
   const EpdFontData* hotGroupFont = nullptr;
   uint16_t hotGroupIndex = UINT16_MAX;
-  std::vector<uint8_t> hotGroup;
+  uint8_t* hotGroup = nullptr;
+  uint32_t hotGroupCapacity = 0;
 
   // Scratch buffer for compacting a single glyph from the hot group.
   // Valid until the next getBitmap() call.
-  std::vector<uint8_t> hotGlyphBuf;
+  uint8_t* hotGlyphBuf = nullptr;
+  uint32_t hotGlyphBufCapacity = 0;
+
+  // Grow an owned buffer; on OOM, leave it null with capacity zero.
+  static bool ensureCapacity(uint8_t*& buf, uint32_t& capacity, uint32_t needed);
 
   void freePageBuffer();
   void freeHotGroup();

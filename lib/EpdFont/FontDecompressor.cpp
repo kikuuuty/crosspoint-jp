@@ -5,6 +5,7 @@
 #include <Utf8.h>
 
 #include <cstdlib>
+#include <cstring>
 
 FontDecompressor::~FontDecompressor() { deinit(); }
 
@@ -33,12 +34,24 @@ void FontDecompressor::freePageBuffer() {
 }
 
 void FontDecompressor::freeHotGroup() {
-  hotGroup.clear();
-  hotGroup.shrink_to_fit();
+  free(hotGroup);
+  hotGroup = nullptr;
+  hotGroupCapacity = 0;
   hotGroupFont = nullptr;
   hotGroupIndex = UINT16_MAX;
-  hotGlyphBuf.clear();
-  hotGlyphBuf.shrink_to_fit();
+  free(hotGlyphBuf);
+  hotGlyphBuf = nullptr;
+  hotGlyphBufCapacity = 0;
+}
+
+bool FontDecompressor::ensureCapacity(uint8_t*& buf, uint32_t& capacity, uint32_t needed) {
+  if (capacity >= needed) return true;
+  // The caller rewrites the entire buffer. Free before growing so old and new
+  // storage need not coexist on the constrained ESP32-C3 heap.
+  free(buf);
+  buf = static_cast<uint8_t*>(malloc(needed));
+  capacity = buf ? needed : 0;
+  return buf != nullptr;
 }
 
 uint16_t FontDecompressor::getGroupIndex(const EpdFontData* fontData, uint32_t glyphIndex) {
@@ -137,6 +150,13 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
     return &fontData->bitmap[glyph->dataOffset];
   }
 
+  // Blank glyphs have no bitmap; do not rely on malloc(0) behavior or compact
+  // through a null scratch buffer after replacing the old vector path.
+  if (glyph->dataLength == 0) {
+    stats.getBitmapTimeUs += micros() - tStart;
+    return nullptr;
+  }
+
   // Check page buffer slots (populated by prewarmCache — one slot per font style)
   for (uint8_t s = 0; s < pageSlotCount; s++) {
     const auto& slot = pageSlots[s];
@@ -170,24 +190,21 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
   }
 
   // Check if hot group already has this group decompressed — if not, decompress it
-  if (!(!hotGroup.empty() && hotGroupFont == fontData && hotGroupIndex == groupIndex)) {
+  if (!(hotGroup != nullptr && hotGroupFont == fontData && hotGroupIndex == groupIndex)) {
     stats.cacheMisses++;
     const EpdFontGroup& group = fontData->groups[groupIndex];
 
-    hotGroup.resize(group.uncompressedSize);
-    if (hotGroup.empty()) {
+    // A failed grow or decode must not leave an old group's identity attached
+    // to freed or overwritten storage.
+    hotGroupFont = nullptr;
+    hotGroupIndex = UINT16_MAX;
+    if (!ensureCapacity(hotGroup, hotGroupCapacity, group.uncompressedSize)) {
       LOG_ERR("FDC", "Failed to allocate %u bytes for hot group %u", group.uncompressedSize, groupIndex);
-      hotGroupFont = nullptr;
-      hotGroupIndex = UINT16_MAX;
       stats.getBitmapTimeUs += micros() - tStart;
       return nullptr;
     }
 
-    if (!decompressGroup(fontData, groupIndex, hotGroup.data(), group.uncompressedSize)) {
-      hotGroup.clear();
-      hotGroup.shrink_to_fit();
-      hotGroupFont = nullptr;
-      hotGroupIndex = UINT16_MAX;
+    if (!decompressGroup(fontData, groupIndex, hotGroup, group.uncompressedSize)) {
       stats.getBitmapTimeUs += micros() - tStart;
       return nullptr;
     }
@@ -200,18 +217,16 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
   }
 
   // Compact just the requested glyph from byte-aligned data into scratch buffer
-  if (glyph->dataLength > hotGlyphBuf.size()) {
-    hotGlyphBuf.resize(glyph->dataLength);
-  }
-  if (hotGlyphBuf.empty()) {
+  if (!ensureCapacity(hotGlyphBuf, hotGlyphBufCapacity, glyph->dataLength)) {
+    LOG_ERR("FDC", "Failed to allocate %u bytes for glyph scratch", static_cast<unsigned>(glyph->dataLength));
     stats.getBitmapTimeUs += micros() - tStart;
     return nullptr;
   }
 
   uint32_t alignedOff = getAlignedOffset(fontData, groupIndex, glyphIndex);
-  compactSingleGlyph(&hotGroup[alignedOff], hotGlyphBuf.data(), glyph->width, glyph->height);
+  compactSingleGlyph(&hotGroup[alignedOff], hotGlyphBuf, glyph->width, glyph->height);
   stats.getBitmapTimeUs += micros() - tStart;
-  return hotGlyphBuf.data();
+  return hotGlyphBuf;
 }
 
 // --- Prewarm: pre-decompress glyph bitmaps for a page of text ---
