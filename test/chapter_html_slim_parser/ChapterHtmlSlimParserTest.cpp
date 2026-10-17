@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <GfxRenderer.h>
+#include <TestImageDecoder.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -21,26 +22,31 @@ struct Result {
   std::vector<std::unique_ptr<Page>> pages;
   int extracts = 0;
   std::vector<std::pair<std::string, uint16_t>> anchors;
+  std::vector<std::pair<int, int>> images;
 };
 
-Result parse(const std::string& body, bool cssEnabled = true, bool vertical = false) {
+Result parse(const std::string& body, bool cssEnabled = true, bool vertical = false, bool extractSuccess = true,
+             bool failWrite = false, uint8_t imageRendering = 0) {
   Storage = {};
   testDelays.clear();
+  Epub::extractedFile = nullptr;
   const std::string path = "/chapter.xhtml";
   Storage.put(path, "<html xmlns:epub=\"http://www.idpf.org/2007/ops\"><body>" + body + "</body></html>");
   auto epub = std::make_shared<Epub>();
+  epub->extractSuccess = extractSuccess;
   GfxRenderer renderer;
   CssParser css("/cache/");
   Storage.put("/style.css", ".show { display: block; } .hide { display: none; }");
   FsFile cssFile;
   check(Storage.openFileForRead("TEST", "/style.css", cssFile) && css.loadFromStream(cssFile), "load real CSS");
+  Storage.failWrite = failWrite;
   Result result;
   ChapterHtmlSlimParser parser(
       epub, path, renderer, 1, 1.0f, false, 1, 480, 800, false, false,
       [&](std::unique_ptr<Page> page) {
         if (page) result.pages.push_back(std::move(page));
       },
-      true, "", "/images/", 0, nullptr, cssEnabled ? &css : nullptr, nullptr, 0, vertical);
+      true, "", "/images/", imageRendering, nullptr, cssEnabled ? &css : nullptr, nullptr, 0, vertical);
   check(parser.parseAndBuildPages(), "parse valid XHTML with production Expat callbacks");
   check(parser.depth == 0 && parser.skipUntilDepth == INT_MAX && parser.listDepth == 0 && parser.tableDepth == 0,
         "all depth/skip/list/table state must be balanced after parsing");
@@ -49,6 +55,9 @@ Result parse(const std::string& body, bool cssEnabled = true, bool vertical = fa
       if (element->getTag() == TAG_PageLine) {
         const auto& block = static_cast<const PageLine&>(*element).getBlock();
         for (const auto& word : block->getWords()) result.text += word;
+      } else if (element->getTag() == TAG_PageImage) {
+        const auto& image = static_cast<const PageImage&>(*element).getImageBlock();
+        result.images.emplace_back(image.getWidth(), image.getHeight());
       } else if (element->getTag() == TAG_PageTableRow) {
         const auto& block = static_cast<const PageTableRow&>(*element).block;
         for (const auto& cell : block->cellLines) {
@@ -62,6 +71,71 @@ Result parse(const std::string& body, bool cssEnabled = true, bool vertical = fa
   result.extracts = epub->extracts;
   result.anchors = parser.getAnchors();
   return result;
+}
+
+void imageRetries() {
+  for (bool vertical : {false, true}) {
+    for (const char* extension : {"png", "jpg", "jpeg"}) {
+      for (int failures : {0, 1, 2, 3}) {
+        imageProbe = {};
+        imageProbe.failuresBeforeSuccess = failures;
+        const auto result =
+            parse("<p>Before</p><img src=\"picture." + std::string(extension) + "\" alt=\"ALT\"/><p>After</p>", true,
+                  vertical);
+        const int attempts = std::min(failures + 1, 3);
+        check(imageProbe.calls == attempts, "dimension attempts must stop at success or at three attempts");
+        check(testDelays.size() == static_cast<size_t>(attempts - 1), "wait only between failed dimension attempts");
+        for (const auto ms : testDelays) check(ms == 50, "retry delay must be exactly 50 ms");
+        for (size_t i = 0; i < imageProbe.delayCounts.size(); ++i) {
+          check(imageProbe.delayCounts[i] == i, "first probe is immediate; subsequent probes follow one wait each");
+        }
+        check(imageProbe.afterFlushAndClose, "dimension reads must follow extraction flush and close");
+        check(result.extracts == 1, "dimension retries must not re-extract the image");
+        check(result.text.starts_with("Before") && result.text.ends_with("After"), "surrounding text must survive");
+        if (failures < 3) {
+          check(result.images == std::vector<std::pair<int, int>>{{120, 80}},
+                "successful retry must preserve image size");
+          check(result.text == "BeforeAfter", "successful image must not fall back to alt text");
+          check(Storage.removed.empty(), "successful cache must remain available for rendering");
+        } else {
+          check(result.images.empty() && result.text.find("ALT") != std::string::npos,
+                "persistent failure must emit the existing alt-text fallback, not an image");
+          check(Storage.removed.size() == 1, "remove failed cache only after retries are exhausted");
+        }
+      }
+    }
+  }
+
+  imageProbe = {};
+  imageProbe.noDecoder = true;
+  const auto missing = parse("<img src=\"a.png\" alt=\"ALT\"/>");
+  check(imageProbe.calls == 0 && testDelays.empty() && missing.text.find("ALT") != std::string::npos,
+        "missing decoder must use fallback immediately, without retry waits");
+
+  for (const bool failWrite : {false, true}) {
+    imageProbe = {};
+    const auto failed = parse("<img src=\"a.png\" alt=\"ALT\"/>", true, false, false, failWrite);
+    check(failed.extracts == (failWrite ? 0 : 1), "failed cache open must not extract");
+    check(imageProbe.calls == 0 && testDelays.empty() && failed.text.find("ALT") != std::string::npos,
+          "failed extraction/open must not probe dimensions or wait");
+  }
+
+  for (uint8_t mode : {1, 2}) {
+    imageProbe = {};
+    const auto result = parse("<img src=\"a.png\" alt=\"ALT\"/>", true, false, true, false, mode);
+    check(result.extracts == 0 && imageProbe.calls == 0 && testDelays.empty(),
+          "placeholder/suppressed image settings must bypass extraction, probes and waits");
+  }
+
+  imageProbe = {};
+  const auto unsupported = parse("<img src=\"a.gif\" alt=\"ALT\"/>");
+  check(unsupported.extracts == 0 && imageProbe.calls == 0 && testDelays.empty(),
+        "unsupported format without a supported fallback must not extract or wait");
+
+  imageProbe = {};
+  const auto multiple = parse("<img src=\"a.png\"/><img src=\"b.jpg\"/><img src=\"c.jpeg\"/>");
+  check(multiple.images.size() == 3 && multiple.extracts == 3 && imageProbe.calls == 3 && testDelays.empty(),
+        "several immediately readable images must incur no fixed waits");
 }
 
 void hiddenElements() {
@@ -126,5 +200,6 @@ void hiddenElements() {
 
 int main() {
   hiddenElements();
-  std::puts("Chapter parser tests passed (hidden presence/CSS, nested content, Japanese, images, balanced state).");
+  imageRetries();
+  std::puts("Chapter parser tests passed (hidden/CSS, Japanese/ruby, tables/lists, image retries/fallbacks, state).");
 }
