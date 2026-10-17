@@ -54,7 +54,14 @@ int zipReadCallback(uzlib_uncomp* uncomp) {
   if (ctx->fileRemaining == 0) return -1;
 
   const size_t toRead = ctx->fileRemaining < ctx->readBufSize ? ctx->fileRemaining : ctx->readBufSize;
-  const size_t bytesRead = ctx->file->read(ctx->readBuf, toRead);
+  const int result = ctx->file->read(ctx->readBuf, toRead);
+  // HalFile::read() returns a negative int on error. Validate it before
+  // converting to size_t, subtracting the remaining size or publishing pointers.
+  if (result < 0) {
+    LOG_ERR("ZIP", "Failed to read compressed data: %d", result);
+    return -1;  // uzlib callback EOF/error sentinel (not a byte count)
+  }
+  const size_t bytesRead = static_cast<size_t>(result);
   ctx->fileRemaining -= bytesRead;
 
   if (bytesRead == 0) return -1;
@@ -473,12 +480,13 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
 
     size_t remaining = inflatedDataSize;
     while (remaining > 0) {
-      const size_t dataRead = file.read(buffer, remaining < chunkSize ? remaining : chunkSize);
-      if (dataRead == 0) {
-        LOG_ERR("ZIP", "Could not read more bytes");
+      const int result = file.read(buffer, remaining < chunkSize ? remaining : chunkSize);
+      if (result <= 0) {
+        LOG_ERR("ZIP", "Could not read more bytes: %d", result);
         free(buffer);
         return false;
       }
+      const size_t dataRead = static_cast<size_t>(result);
 
       if (out.write(buffer, dataRead) != dataRead) {
         LOG_ERR("ZIP", "Failed to write all output bytes to stream");
