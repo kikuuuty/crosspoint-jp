@@ -33,6 +33,24 @@ Exceptions and RTTI are disabled, as in the firmware.
 - Japanese text and ruby association survive in horizontal and vertical layout.
 - Parser depth, skip, table and list state are balanced after each document.
 
+## Image dimension retries (upstream #2434)
+
+The dimension-probe test double can fail zero to three times. With PNG, JPEG,
+horizontal and vertical layout, the tests verify:
+
+- First probe follows extraction flush/close, without a fixed delay.
+- Success on attempt one/two/three causes zero/one/two 50ms waits respectively.
+- Persistent failure stops after three probes and two waits (100ms total), then
+  removes the failed cache and emits the existing alt-text fallback.
+- Retrying never re-extracts an image, changes its size, or drops surrounding text.
+- Successful images retain their cache. Multiple immediately readable images
+  introduce no waits.
+- Missing decoders, unsupported formats, failed cache writes/extractions and
+  placeholder/suppression settings introduce no pointless probe/retry waits.
+
+This exercises the production retry loop and callback integration, not physical
+SD-card synchronization or real JPEG/PNG decoding.
+
 ## Device smoke test
 
 Existing chapter caches must be cleared/rebuilt (or use a new EPUB filename) to
@@ -42,3 +60,9 @@ the visible text/images remain, with CSS enabled and disabled. Check Japanese
 text/ruby and numbered lists in both orientations. Real fonts, SD timings and
 pixel rendering still require device verification; these tests do not emulate
 the ESP32 hardware.
+
+For images, rebuild a chapter with several PNG/JPEG illustrations (including one
+with alt text), check that each is displayed at the same size, and navigate back
+and forth in both orientations. Check display, placeholder and suppress image
+settings. Rebuild the cache to measure indexing time; existing caches do not run
+the changed extraction/probe path. Do not corrupt an SD card to simulate latency.
