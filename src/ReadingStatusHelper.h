@@ -69,7 +69,8 @@ class ReadingStatusIndex {
 };
 
 // 指定ファイルを既読（isFinished=1）にマークする。
-// progress.bin が存在する場合は末尾バイトのみ更新して読書位置を保持。
+// progress.bin が存在する場合は読書位置を保持して読了フラグ・進捗率を更新。
+// 一時ファイルを経由して保存し、進捗ファイルを直接上書きしない。
 // 存在しない場合は新規作成（spineIndex/page等はゼロ初期化）。
 // EPUB/XTC 形式を拡張子から自動判定。
 // 戻り値: 成功時 true、EPUB/XTC以外やファイルI/O失敗時 false。

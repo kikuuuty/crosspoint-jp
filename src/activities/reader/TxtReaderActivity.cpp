@@ -13,6 +13,7 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
+#include "ProgressFile.h"
 #include "ReaderUtils.h"
 #include "ReadingStatusHelper.h"
 #include "RecentBooksStore.h"
@@ -446,18 +447,12 @@ void TxtReaderActivity::saveProgress() {
   data[4] = percent;
   if (progressSaved && memcmp(data, lastSavedProgress, sizeof(data)) == 0) return;
 
-  FsFile f;
-  if (Storage.openFileForWrite("TRS", txt->getCachePath() + "/progress.bin", f)) {
-    // 形式は docs/file-formats.md の progress.bin を参照。末尾の進捗率はホーム画面の表示用
-    if (f.write(data, sizeof(data)) != sizeof(data)) {
-      LOG_ERR("TRS", "Could not write progress!");
-      f.close();
-      return;
-    }
-    memcpy(lastSavedProgress, data, sizeof(data));
-    progressSaved = true;
-    f.close();
+  if (!ProgressFile::writeAtomic(txt->getCachePath(), data, sizeof(data))) {
+    LOG_ERR("TRS", "Could not save progress!");
+    return;
   }
+  memcpy(lastSavedProgress, data, sizeof(data));
+  progressSaved = true;
 }
 
 void TxtReaderActivity::loadProgress() {

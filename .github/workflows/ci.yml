@@ -132,6 +132,16 @@ jobs:
           python-version: '3.14'
       - run: python test/run_zip_file_test.py
 
+  progress-file-test:
+    name: Progress File Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - run: python test/run_progress_file_test.py
+
   # This job is used as the PR required actions check, allows for changes to other steps in the future without breaking
   # PR requirements.
   test-status:
@@ -142,6 +152,7 @@ jobs:
       - cppcheck
       - ota-channel-test
       - zip-file-test
+      - progress-file-test
     if: always()
     runs-on: ubuntu-latest
     steps:
