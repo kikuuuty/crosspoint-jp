@@ -12,6 +12,8 @@
 #include <functional>
 #include <string>
 
+#include "ProgressFile.h"
+
 namespace {
 
 // progress.bin の形式差（docs/file-formats.md 参照）。
@@ -236,13 +238,10 @@ bool markAsFinished(const std::string& filepath, const std::string& cacheDir) {
   Storage.mkdir(cacheDir.c_str());
   Storage.mkdir(bookDir.c_str());
 
-  FsFile wf;
-  if (!Storage.openFileForWrite("RSH", progressPath, wf)) {
-    LOG_ERR("RSH", "markAsFinished: Could not open %s for write", progressPath.c_str());
+  if (!ProgressFile::writeAtomic(bookDir, data, recordSize)) {
+    LOG_ERR("RSH", "markAsFinished: Could not save %s", progressPath.c_str());
     return false;
   }
-  wf.write(data, recordSize);
-  wf.close();
   LOG_DBG("RSH", "Marked as finished: %s", filepath.c_str());
   return true;
 }

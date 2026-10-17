@@ -24,6 +24,7 @@
 #include "KOReaderSyncActivity.h"
 #include "MappedInputManager.h"
 #include "OrientationHelper.h"
+#include "ProgressFile.h"
 #include "QrDisplayActivity.h"
 #include "ReaderUtils.h"
 #include "ReadingStatusHelper.h"
@@ -996,23 +997,15 @@ void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
   data[7] = (percent >= 0 && percent <= 100) ? static_cast<uint8_t>(percent) : ReadingProgress::PERCENT_UNKNOWN;
   if (progressSaved && memcmp(data, lastSavedProgress, sizeof(data)) == 0) return;
 
-  FsFile f;
-  if (Storage.openFileForWrite("ERS", epub->getCachePath() + "/progress.bin", f)) {
-    // 形式は docs/file-formats.md の progress.bin を参照。末尾の進捗率は後から追加したフィールドで、
-    // 旧ファイル（7 バイト）は ReadingProgress::PERCENT_UNKNOWN 扱いになる
-    if (f.write(data, sizeof(data)) != sizeof(data)) {
-      LOG_ERR("ERS", "Could not write progress!");
-      f.close();
-      return;
-    }
-    memcpy(lastSavedProgress, data, sizeof(data));
-    progressSaved = true;
-    f.close();
-    LOG_DBG("ERS", "Progress saved: Chapter %d, Page %d, Finished: %d, %d%%", spineIndex, currentPage, isFinished,
-            percent);
-  } else {
+  // Keep the existing 8-byte format, including finished state and book percent.
+  if (!ProgressFile::writeAtomic(epub->getCachePath(), data, sizeof(data))) {
     LOG_ERR("ERS", "Could not save progress!");
+    return;
   }
+  memcpy(lastSavedProgress, data, sizeof(data));
+  progressSaved = true;
+  LOG_DBG("ERS", "Progress saved: Chapter %d, Page %d, Finished: %d, %d%%", spineIndex, currentPage, isFinished,
+          percent);
 }
 void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int orientedMarginTop,
                                         const int orientedMarginRight, const int orientedMarginBottom,
