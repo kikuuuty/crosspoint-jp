@@ -20,7 +20,7 @@ DirectionSettingsActivity::DirectionSettingsActivity(GfxRenderer& renderer, Mapp
 
 void DirectionSettingsActivity::buildItems() {
   items.clear();
-  items.reserve(12);
+  items.reserve(13);
 
   // Font Family
   items.push_back({StrId::STR_FONT_FAMILY, Item::Type::FONT_FAMILY, nullptr, {}, {}});
@@ -30,6 +30,13 @@ void DirectionSettingsActivity::buildItems() {
                    Item::Type::ENUM,
                    &DirectionSettings::fontSize,
                    {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE},
+                   {}});
+
+  // Font weight is independent of font size and anti-aliasing.
+  items.push_back({StrId::STR_FONT_WEIGHT,
+                   Item::Type::ENUM,
+                   &DirectionSettings::fontWeight,
+                   {StrId::STR_FONT_WEIGHT_STANDARD, StrId::STR_FONT_WEIGHT_MEDIUM, StrId::STR_FONT_WEIGHT_HEAVY},
                    {}});
 
   // Line Spacing (slider)

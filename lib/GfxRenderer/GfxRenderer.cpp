@@ -2090,21 +2090,26 @@ void GfxRenderer::drawTextVertical(const int fontId, const int x, const int y, c
       const int drawX = x + vertGlyph->left;
       const int drawY = yPos + ascender - vertGlyph->top;
 
-      int pixelPosition = 0;
-      for (int glyphY = 0; glyphY < vertGlyph->height; glyphY++) {
-        const int screenY = drawY + glyphY;
-        for (int glyphX = 0; glyphX < vertGlyph->width; glyphX++, pixelPosition++) {
-          const int screenX = drawX + glyphX;
-          const uint8_t byte = vertBitmap[pixelPosition >> 2];
-          const uint8_t bit_index = (3 - (pixelPosition & 3)) * 2;
-          const uint8_t bmpVal = 3 - ((byte >> bit_index) & 0x3);
+      if (fontWeight != GlyphWeight::STANDARD) {
+        renderWeightedGlyph({vertBitmap, vertGlyph->width, vertGlyph->height, true}, drawX, drawY, vertGlyph->width,
+                            vertGlyph->height, black);
+      } else {
+        int pixelPosition = 0;
+        for (int glyphY = 0; glyphY < vertGlyph->height; glyphY++) {
+          const int screenY = drawY + glyphY;
+          for (int glyphX = 0; glyphX < vertGlyph->width; glyphX++, pixelPosition++) {
+            const int screenX = drawX + glyphX;
+            const uint8_t byte = vertBitmap[pixelPosition >> 2];
+            const uint8_t bit_index = (3 - (pixelPosition & 3)) * 2;
+            const uint8_t bmpVal = 3 - ((byte >> bit_index) & 0x3);
 
-          if (renderMode == BW && isGlyphInk(bmpVal)) {
-            drawPixel(screenX, screenY, black);
-          } else if (renderMode == GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
-            drawPixel(screenX, screenY, false);
-          } else if (renderMode == GRAYSCALE_LSB && bmpVal == 1) {
-            drawPixel(screenX, screenY, false);
+            if (renderMode == BW && isGlyphInk(bmpVal)) {
+              drawPixel(screenX, screenY, black);
+            } else if (renderMode == GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
+              drawPixel(screenX, screenY, false);
+            } else if (renderMode == GRAYSCALE_LSB && bmpVal == 1) {
+              drawPixel(screenX, screenY, false);
+            }
           }
         }
       }
@@ -2194,30 +2199,35 @@ void GfxRenderer::drawTextSideways(const int fontId, const int x, const int y, c
       }
       const int baseY = yPosPx + drawLeft;
 
-      for (int glyphY = 0; glyphY < glyph->height; glyphY++) {
-        // Map glyph row to scaled screen X
-        const int screenX = needsScale ? (baseX - (glyphY * scale >> 8)) : (baseX - glyphY);
-        for (int glyphX = 0; glyphX < glyph->width; glyphX++) {
-          const int screenY = needsScale ? (baseY + (glyphX * scale >> 8)) : (baseY + glyphX);
-          const int pixelPosition = glyphY * glyph->width + glyphX;
+      if (fontWeight != GlyphWeight::STANDARD) {
+        renderWeightedGlyph({bitmap, glyph->width, glyph->height, fontData->is2Bit}, baseX, baseY, drawW, drawH, black,
+                            1);
+      } else {
+        for (int glyphY = 0; glyphY < glyph->height; glyphY++) {
+          // Map glyph row to scaled screen X
+          const int screenX = needsScale ? (baseX - (glyphY * scale >> 8)) : (baseX - glyphY);
+          for (int glyphX = 0; glyphX < glyph->width; glyphX++) {
+            const int screenY = needsScale ? (baseY + (glyphX * scale >> 8)) : (baseY + glyphX);
+            const int pixelPosition = glyphY * glyph->width + glyphX;
 
-          if (fontData->is2Bit) {
-            const uint8_t byte = bitmap[pixelPosition / 4];
-            const uint8_t bit_index = (3 - pixelPosition % 4) * 2;
-            const uint8_t bmpVal = 3 - ((byte >> bit_index) & 0x3);
+            if (fontData->is2Bit) {
+              const uint8_t byte = bitmap[pixelPosition / 4];
+              const uint8_t bit_index = (3 - pixelPosition % 4) * 2;
+              const uint8_t bmpVal = 3 - ((byte >> bit_index) & 0x3);
 
-            if (renderMode == BW && isGlyphInk(bmpVal)) {
-              drawPixel(screenX, screenY, black);
-            } else if (renderMode == GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
-              drawPixel(screenX, screenY, false);
-            } else if (renderMode == GRAYSCALE_LSB && bmpVal == 1) {
-              drawPixel(screenX, screenY, false);
-            }
-          } else {
-            const uint8_t byte = bitmap[pixelPosition / 8];
-            const uint8_t bit_index = 7 - (pixelPosition % 8);
-            if ((byte >> bit_index) & 1) {
-              drawPixel(screenX, screenY, black);
+              if (renderMode == BW && isGlyphInk(bmpVal)) {
+                drawPixel(screenX, screenY, black);
+              } else if (renderMode == GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
+                drawPixel(screenX, screenY, false);
+              } else if (renderMode == GRAYSCALE_LSB && bmpVal == 1) {
+                drawPixel(screenX, screenY, false);
+              }
+            } else {
+              const uint8_t byte = bitmap[pixelPosition / 8];
+              const uint8_t bit_index = 7 - (pixelPosition % 8);
+              if ((byte >> bit_index) & 1) {
+                drawPixel(screenX, screenY, black);
+              }
             }
           }
         }
@@ -2372,7 +2382,10 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
 
     const uint8_t* bitmap = getGlyphBitmap(fontData, glyph);
 
-    if (bitmap != nullptr) {
+    if (bitmap != nullptr && fontWeight != GlyphWeight::STANDARD) {
+      renderWeightedGlyph({bitmap, width, height, fontData->is2Bit}, x + fontData->ascender - top, yPos - left, width,
+                          height, black, -1);
+    } else if (bitmap != nullptr) {
       for (int glyphY = 0; glyphY < height; glyphY++) {
         for (int glyphX = 0; glyphX < width; glyphX++) {
           const int pixelPosition = glyphY * width + glyphX;
@@ -2807,7 +2820,10 @@ void GfxRenderer::renderChar(const int fontId, const EpdFontFamily& fontFamily, 
     return std::make_pair(from, to > limit ? limit : to);
   };
 
-  if (bitmap != nullptr) {
+  if (bitmap != nullptr && fontWeight != GlyphWeight::STANDARD) {
+    renderWeightedGlyph({bitmap, baseW, baseH, is2Bit}, *x + drawLeft, *y - drawTop, drawW, drawH, pixelState, 0,
+                        synthBold);
+  } else if (bitmap != nullptr) {
     for (int pass = 0; pass < boldPasses; pass++) {
       const int xBoldOffset = pass;  // 2nd pass: 1px right shift for bold
       for (int glyphY = 0; glyphY < drawH; glyphY++) {
@@ -2874,6 +2890,34 @@ void GfxRenderer::renderChar(const int fontId, const EpdFontFamily& fontFamily, 
   if (needsScale) advPx = (advPx * scale + 128) >> 8;
   if (synthBold) advPx += 1;
   *x += advPx;
+}
+
+void GfxRenderer::renderWeightedGlyph(const GlyphWeight::Bitmap& bitmap, const int x, const int y, const int drawW,
+                                      const int drawH, const bool pixelState, const int rotation,
+                                      const bool syntheticBold) const {
+  if (drawW <= 0 || drawH <= 0) return;
+  const int grow = fontWeight == GlyphWeight::HEAVY ? 1 : 0;
+  const int outputW = drawW + grow + (syntheticBold ? 1 : 0);
+  const int outputH = drawH + grow;
+  for (int gy = 0; gy < outputH; ++gy) {
+    for (int gx = 0; gx < outputW; ++gx) {
+      const uint8_t ink = GlyphWeight::coverage(bitmap, gx, gy, drawW, drawH, fontWeight, syntheticBold);
+      if (!ink) continue;
+      const uint8_t bmpVal = 3 - ink;
+      const int screenX = rotation == 0 ? x + gx : x - rotation * gy;
+      const int screenY = rotation == 0 ? y + gy : y + rotation * gx;
+      if (renderMode == BW) {
+        if (isGlyphInk(bmpVal)) drawPixel(screenX, screenY, pixelState);
+      } else {
+        // All three passes use the same coverage, including the grown edge.
+        // Merge synthetic-bold coverage before encoding, not by drawing shifted
+        // grayscale passes which could overwrite each other's stronger pixels.
+        const uint8_t val = darkMode ? 3 - bmpVal : bmpVal;
+        const bool bit = renderMode == GRAYSCALE_LSB ? (val & 1) : ((val >> 1) & 1);
+        drawPixel(screenX, screenY, !bit);
+      }
+    }
+  }
 }
 
 void GfxRenderer::getOrientedViewableTRBL(int* outTop, int* outRight, int* outBottom, int* outLeft) const {
@@ -2986,18 +3030,22 @@ void GfxRenderer::renderExternalGlyph(const uint8_t* bitmap, ExternalFont* font,
 
   // Only render pixels from minX onwards, drawn at screen position *x
   // This trims the left-side empty space so advanceX matches the drawn width
-  for (int glyphY = 0; glyphY < height; glyphY++) {
-    const int screenY = startY + glyphY;
-    for (int glyphX = minX; glyphX < width; glyphX++) {
-      const int byteIndex = glyphY * bytesPerRow + (glyphX / 8);
-      const int bitIndex = 7 - (glyphX % 8);  // MSB first
+  if (fontWeight != GlyphWeight::STANDARD) {
+    renderWeightedGlyph({bitmap, width - minX, height, false, bytesPerRow, minX}, *x, startY, width - minX, height,
+                        pixelState);
+  } else {
+    for (int glyphY = 0; glyphY < height; glyphY++) {
+      const int screenY = startY + glyphY;
+      for (int glyphX = minX; glyphX < width; glyphX++) {
+        const int byteIndex = glyphY * bytesPerRow + (glyphX / 8);
+        const int bitIndex = 7 - (glyphX % 8);  // MSB first
 
-      if ((bitmap[byteIndex] >> bitIndex) & 1) {
-        drawPixel(*x + (glyphX - minX), screenY, pixelState);
+        if ((bitmap[byteIndex] >> bitIndex) & 1) {
+          drawPixel(*x + (glyphX - minX), screenY, pixelState);
+        }
       }
     }
   }
-
   // Advance cursor
   const int advance = (advanceOverride >= 0) ? advanceOverride : width;
   *x += std::max(1, advance);
@@ -3028,6 +3076,17 @@ void GfxRenderer::renderBuiltinCjkGlyph(const uint32_t cp, int* x, const int y, 
 
   if (hasContent) {
     const int startY = y - fontHeight + 4;  // 4px descent for CJK characters
+
+    if (fontWeight != GlyphWeight::STANDARD) {
+      renderWeightedGlyph({bitmap, fontWidth, fontHeight, false, bytesPerRow}, *x, startY, fontWidth, fontHeight,
+                          pixelState);
+      if (const uint8_t* descender = CjkUiFont20::getCjkUiDescender(cp)) {
+        renderWeightedGlyph({descender, fontWidth, CjkUiFont20::CJK_UI_DESCENDER_ROWS, false, bytesPerRow}, *x,
+                            startY + fontHeight, fontWidth, CjkUiFont20::CJK_UI_DESCENDER_ROWS, pixelState);
+      }
+      *x += actualWidth;
+      return;
+    }
 
     for (int glyphY = 0; glyphY < fontHeight; glyphY++) {
       const int screenY = startY + glyphY;

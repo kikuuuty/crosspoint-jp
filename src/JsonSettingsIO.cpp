@@ -150,6 +150,7 @@ bool JsonSettingsIO::saveSettings(const CrossPointSettings& s, const char* path)
       obj["sdFontFamilyName"] = ds.sdFontFamilyName;
     }
     obj["fontSize"] = ds.fontSize;
+    obj["fontWeight"] = ds.fontWeight;
     obj["lineSpacing"] = ds.lineSpacing;
     obj["charSpacing"] = ds.charSpacing;
     obj["paragraphAlignment"] = ds.paragraphAlignment;
@@ -261,6 +262,8 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
     ds.sdFontFamilyName[sizeof(ds.sdFontFamilyName) - 1] = '\0';
     ds.fontSize = obj["fontSize"] | ds.fontSize;
     if (ds.fontSize >= CrossPointSettings::FONT_SIZE_COUNT) ds.fontSize = 1;
+    ds.fontWeight = obj["fontWeight"] | static_cast<uint8_t>(0);
+    if (ds.fontWeight > 2) ds.fontWeight = 0;
     ds.lineSpacing = obj["lineSpacing"] | ds.lineSpacing;
     if (ds.lineSpacing < CrossPointSettings::LINE_SPACING_MIN) ds.lineSpacing = CrossPointSettings::LINE_SPACING_MIN;
     if (ds.lineSpacing > CrossPointSettings::LINE_SPACING_MAX) ds.lineSpacing = CrossPointSettings::LINE_SPACING_MAX;

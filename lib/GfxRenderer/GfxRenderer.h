@@ -12,6 +12,7 @@ class SdCardFont;
 #include <vector>
 
 #include "Bitmap.h"
+#include "GlyphWeight.h"
 
 // Forward declaration for external font support
 class ExternalFont;
@@ -71,6 +72,7 @@ class GfxRenderer {
   bool darkMode = false;
   // 2bit グリフ→1bit の変換しきい値（既定は BW 表示向けの Sharp）
   GlyphInk glyphInk = GlyphInk::Sharp;
+  uint8_t fontWeight = GlyphWeight::STANDARD;
   // Whether to invert images in dark mode (user preference)
   bool invertImagesInDarkMode = false;
   // Extra spacing (in pixels) for ASCII letters/digits when using external reader font.
@@ -92,6 +94,10 @@ class GfxRenderer {
                            int advanceOverride = -1, int minX = 0) const;
   // Render CJK character using built-in UI font (from PROGMEM)
   void renderBuiltinCjkGlyph(uint32_t cp, int* x, int y, bool pixelState) const;
+  // Weighted bitmap paths share coverage before BW/grayscale encoding. Rotation:
+  // 0 = upright, 1 = (x-y, y+x) sideways, -1 = (x+y, y-x).
+  void renderWeightedGlyph(const GlyphWeight::Bitmap& bitmap, int x, int y, int drawW, int drawH, bool pixelState,
+                           int rotation = 0, bool syntheticBold = false) const;
   // Check if fontId is a reader font (should use external Chinese font or SD card font rendering path)
   bool isReaderFont(int fontId) const;
   // Get effective font ID, handling fallback for external reader font IDs
@@ -148,6 +154,8 @@ class GfxRenderer {
 
   void setGlyphInk(const GlyphInk v) { glyphInk = v; }
   GlyphInk getGlyphInk() const { return glyphInk; }
+  void setFontWeight(uint8_t weight) { fontWeight = weight <= GlyphWeight::HEAVY ? weight : GlyphWeight::STANDARD; }
+  uint8_t getFontWeight() const { return fontWeight; }
 
   // bmpVal は 0=黒 1=濃灰 2=薄灰 3=白（それぞれカバレッジ 75/50/25/0% 以上）。
   // 1画素ごとに呼ばれるのでヘッダ内インラインにしている。

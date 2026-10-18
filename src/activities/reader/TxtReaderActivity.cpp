@@ -365,6 +365,7 @@ void TxtReaderActivity::renderPage() {
 
   // Render text lines with alignment
   auto renderLines = [&]() {
+    renderer.setFontWeight(SETTINGS.horizontal.fontWeight);
     int y = cachedOrientedMarginTop;
     for (const auto& line : currentPageLines) {
       if (!line.empty()) {
@@ -396,6 +397,7 @@ void TxtReaderActivity::renderPage() {
       }
       y += lineHeight;
     }
+    renderer.setFontWeight(0);
   };
 
   // Font prewarm: scan pass accumulates text, then prewarm, then real render

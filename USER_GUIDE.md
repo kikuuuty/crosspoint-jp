@@ -163,6 +163,7 @@ The Settings screen allows you to configure the device's behavior. There are a f
   - "Noto Sans" - Google's sans-serif font
   - "Open Dyslexic" - Font designed for readers with dyslexia
 - **Reader Font Size**: Adjust the text size for reading; options are "Small", "Medium" (default), "Large", or "X Large".
+- **Font Weight**: Under **Horizontal Settings** and **Vertical Settings**, immediately below Font Size, choose "Standard" (default), "Slightly Heavier", or "Heavy". Each direction is saved independently. Slightly Heavier strengthens faint strokes; Heavy also expands the outline by one pixel. Works with text anti-aliasing on or off, without changing font size, pagination, or screen refresh count. Ruby, images, and status bars are unchanged. For 1-bit bitmap fonts, Slightly Heavier has no gray coverage to strengthen; use Heavy to widen strokes.
 
 - **Reader Line Spacing**: Adjust the spacing between lines; options are "Tight", "Normal" (default), or "Wide".
 - **Reader Screen Margin**: Controls the screen margins in Reading Mode between 5 and 40 pixels in 5-pixel increments.

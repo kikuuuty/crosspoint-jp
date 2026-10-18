@@ -9,6 +9,7 @@ struct DirectionSettings {
   uint8_t fontFamily = 0;  // CrossPointSettings::NOTOSERIF
   char sdFontFamilyName[32] = "";
   uint8_t fontSize = 1;            // CrossPointSettings::MEDIUM
+  uint8_t fontWeight = 0;          // 0=standard, 1=slightly heavier, 2=heavy
   uint8_t lineSpacing = 185;       // 80-250 (%)
   uint8_t charSpacing = 0;         // 0-50 (5刻み)
   uint8_t paragraphAlignment = 0;  // CrossPointSettings::JUSTIFIED

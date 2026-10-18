@@ -1046,8 +1046,16 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // Sharp のままにする。フチまで黒くすると漢字の画がつぶれて解像感が落ちるため。
   const bool grayscaleText = SETTINGS.getDirectionSettings(verticalMode).textAntiAliasing &&
                              !FontManager::getInstance().isExternalFontEnabled();
+  // Limit weight to page content: UI/status text and images retain their usual
+  // rendering. Use exactly the same correction in BW and both grayscale passes.
+  const auto renderPage = [&]() {
+    renderer.setFontWeight(SETTINGS.getDirectionSettings(verticalMode).fontWeight);
+    page->render(renderer, SETTINGS.getReaderFontId(verticalMode), orientedMarginLeft, orientedMarginTop,
+                 viewportWidth);
+    renderer.setFontWeight(0);
+  };
   renderer.setGlyphInk(grayscaleText ? GfxRenderer::GlyphInk::GrayscaleBase : GfxRenderer::GlyphInk::Sharp);
-  page->render(renderer, SETTINGS.getReaderFontId(verticalMode), orientedMarginLeft, orientedMarginTop, viewportWidth);
+  renderPage();
   // ステータスバーはグレーパスで描き直さないので常に Sharp で描く
   renderer.setGlyphInk(GfxRenderer::GlyphInk::Sharp);
   renderStatusBar();
@@ -1067,8 +1075,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       // Re-render page content to restore images into the blanked area
       // Status bar is not re-rendered here to avoid reading stale dynamic values (e.g. battery %)
       renderer.setGlyphInk(grayscaleText ? GfxRenderer::GlyphInk::GrayscaleBase : GfxRenderer::GlyphInk::Sharp);
-      page->render(renderer, SETTINGS.getReaderFontId(verticalMode), orientedMarginLeft, orientedMarginTop,
-                   viewportWidth);
+      renderPage();
       renderer.setGlyphInk(GfxRenderer::GlyphInk::Sharp);
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     } else {
@@ -1089,16 +1096,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   if (bwStored) {
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-    page->render(renderer, SETTINGS.getReaderFontId(verticalMode), orientedMarginLeft, orientedMarginTop,
-                 viewportWidth);
+    renderPage();
     renderer.copyGrayscaleLsbBuffers();
     const auto tGrayLsb = millis();
 
     // Render and copy to MSB buffer
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-    page->render(renderer, SETTINGS.getReaderFontId(verticalMode), orientedMarginLeft, orientedMarginTop,
-                 viewportWidth);
+    renderPage();
     renderer.copyGrayscaleMsbBuffers();
     const auto tGrayMsb = millis();
 
