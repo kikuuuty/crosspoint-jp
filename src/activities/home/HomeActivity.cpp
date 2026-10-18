@@ -287,10 +287,9 @@ void HomeActivity::render(RenderLock&&) {
 
   renderer.displayBuffer();
 
-  if (!firstRenderDone) {
-    firstRenderDone = true;
-    requestUpdate();
-  } else if (!recentsLoaded && !recentsLoading) {
+  // The first screen is already visible. Missing covers request another
+  // render when needed; don't display the same screen twice unconditionally.
+  if (!recentsLoaded && !recentsLoading) {
     recentsLoading = true;
     loadRecentCovers(metrics.homeCoverHeight);
   }
