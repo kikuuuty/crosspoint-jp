@@ -1080,12 +1080,13 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   }
   const auto tDisplay = millis();
 
-  // Save bw buffer to reset buffer state after grayscale data sync
-  renderer.storeBwBuffer();
+  // Only grayscale rendering overwrites the BW pixels. Keep panel baseline
+  // synchronization below even when no snapshot is needed.
+  const bool bwStored = grayscaleText && renderer.storeBwBuffer();
   const auto tBwStore = millis();
 
   // Grayscale rendering - skip for external fonts (1-bit bitmap, no antialiasing benefit)
-  if (grayscaleText) {
+  if (bwStored) {
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
     page->render(renderer, SETTINGS.getReaderFontId(verticalMode), orientedMarginLeft, orientedMarginTop,
@@ -1116,8 +1117,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
             tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tBwStore - tDisplay, tGrayLsb - tBwStore,
             tGrayMsb - tGrayLsb, tGrayDisplay - tGrayMsb, tBwRestore - tGrayDisplay, tEnd - t0);
   } else {
-    // restore the bw data
-    renderer.restoreBwBuffer();
+    // The BW pixels are still intact, including when snapshot allocation
+    // failed. Synchronize the panel without allocating a full-screen copy.
+    renderer.cleanupGrayscaleWithFrameBuffer();
+    if (grayscaleText) LOG_ERR("ERS", "BW snapshot failed; keeping the B/W page without grayscale");
     const auto tBwRestore = millis();
 
     const auto tEnd = millis();
