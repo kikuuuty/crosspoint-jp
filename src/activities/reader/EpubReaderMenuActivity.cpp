@@ -32,25 +32,25 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
   std::vector<MenuItem> items;
   items.reserve(16);
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
+  items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
   if (hasFootnotes) {
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
   }
-  items.push_back({MenuAction::READER_SETTINGS, StrId::STR_SETTINGS_TITLE});
-  items.push_back({MenuAction::STYLE_FIRST_LINE_INDENT, StrId::STR_FIRST_LINE_INDENT});
+  items.push_back({MenuAction::READER_SETTINGS, StrId::STR_READER_SETTINGS});
+  items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
   items.push_back({MenuAction::STYLE_LINE_SPACING, StrId::STR_LINE_SPACING});
+  items.push_back({MenuAction::STYLE_FIRST_LINE_INDENT, StrId::STR_FIRST_LINE_INDENT});
   items.push_back({MenuAction::STYLE_INVERT_IMAGES, StrId::STR_INVERT_IMAGES});
   items.push_back({MenuAction::STYLE_STATUS_BAR, StrId::STR_CUSTOMISE_STATUS_BAR});
-  items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
   items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
-  items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
-  items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
-  items.push_back({MenuAction::DISPLAY_QR, StrId::STR_DISPLAY_QR});
-  items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
-  items.push_back({MenuAction::SYNC, StrId::STR_SYNC_PROGRESS});
-  items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
   if (gpio.deviceIsX3()) {
     items.push_back({MenuAction::TILT_PAGE_TURN, StrId::STR_TILT_PAGE_TURN});
   }
+  items.push_back({MenuAction::SYNC, StrId::STR_SYNC_PROGRESS});
+  items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
+  items.push_back({MenuAction::DISPLAY_QR, StrId::STR_DISPLAY_QR});
+  items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
+  items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
   return items;
 }
 
@@ -202,8 +202,12 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
     if (menuItems[i].action == MenuAction::AUTO_PAGE_TURN) {
       // Render current page turn value on the right edge of the content area.
       // Settings can change the language while this menu remains on the stack.
-      const auto pageTurnValue =
-          selectedPageTurnOption == 0 ? tr(STR_STATE_OFF) : pageTurnLabels[selectedPageTurnOption];
+      char rateValue[32];
+      const char* pageTurnValue = tr(STR_STATE_OFF);
+      if (selectedPageTurnOption != 0) {
+        snprintf(rateValue, sizeof(rateValue), tr(STR_AUTO_TURN_RATE_FORMAT), pageTurnLabels[selectedPageTurnOption]);
+        pageTurnValue = rateValue;
+      }
       const auto pageTurnWidth = renderer.getTextWidth(UI_10_FONT_ID, pageTurnValue);
       renderer.drawText(UI_10_FONT_ID, contentX + contentWidth - 20 - pageTurnWidth, displayY, pageTurnValue,
                         !isSelected);
